@@ -24,6 +24,7 @@ function isValidClip(data: unknown): data is Clip {
     typeof obj.project_id === 'number' &&
     typeof obj.start_time === 'number' &&
     typeof obj.end_time === 'number'
+    // Note: has_burned_subtitles may be undefined for backwards compatibility
   );
 }
 
@@ -88,6 +89,15 @@ export interface Clip {
   video_path: string | null;
   video_path_with_subtitles: string | null;
   subtitle_path: string | null;
+  subtitle_data: Array<{
+    id: string;
+    start: number;
+    end: number;
+    text: string;
+    words?: Array<{ word: string; start: number; end: number }>;
+  }> | null;
+  subtitle_file: string | null;
+  has_burned_subtitles: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -226,6 +236,18 @@ export async function deleteClip(clipId: number): Promise<void> {
   if (!response.ok) {
     await handleResponse(response);
   }
+}
+
+export async function updateClipTitle(clipId: number, title: string): Promise<Clip> {
+  const response = await fetch(`${API_BASE_URL}/clips/${clipId}/title`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ title }),
+  });
+
+  return handleResponse(response, isValidClip);
 }
 
 export function getClipDownloadUrl(clipId: number, withSubtitles = true): string {

@@ -7,10 +7,15 @@ import uuid
 import shutil
 from datetime import datetime
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from pathlib import Path
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+# Rate limiter instance
+limiter = Limiter(key_func=get_remote_address)
 
 from config import (
     VIDEOS_DIR,
@@ -22,8 +27,14 @@ from config import (
     REFRAME_DYNAMIC_MODE,
     NUM_CLIPS_TO_GENERATE,
     OUTPUT_FORMATS,
-    DEFAULT_OUTPUT_FORMAT
+    DEFAULT_OUTPUT_FORMAT,
+    SUPPORTED_LANGUAGES,
+    DEFAULT_LANGUAGE
 )
+from logging_config import get_api_logger, get_background_logger
+
+logger = get_api_logger()
+bg_logger = get_background_logger()
 
 from models import get_db, Project, Clip, get_background_session, db_lock
 from models.project import ProjectStatus
@@ -111,7 +122,8 @@ def update_progress(
 
         db.commit()
     except Exception as e:
-        print(f"⚠️ Failed to update progress: {e}")
+        bg_logger.error("Failed to update progress", project_id=project.id, error=str(e))
+        print(f"Failed to update progress: {e}")
         db.rollback()
         raise
 
@@ -149,7 +161,8 @@ def cut_clip_with_optional_reframe(
                     sample_interval=REFRAME_SAMPLE_INTERVAL
                 )
         except Exception as e:
-            print(f"⚠️  AI Reframe failed, falling back to center crop: {e}")
+            bg_logger.warning("AI Reframe failed, falling back to center crop", error=str(e))
+            print(f"AI Reframe failed, falling back to center crop: {e}")
 
     # Fallback to simple center crop
     return cutter.cut_clip(
@@ -163,7 +176,7 @@ def cut_clip_with_optional_reframe(
 
 # ============ Background Processing ============
 
-def process_video(project_id: int):
+def process_video(project_id: int, language: str = None):
     """
     Background task to process video with progress tracking:
     1. Download video (0-15%)
@@ -172,6 +185,10 @@ def process_video(project_id: int):
     4. Cut clips + subtitles (60-100%)
 
     Uses thread-safe database session and processing lock to prevent race conditions.
+
+    Args:
+        project_id: Project ID to process
+        language: Language code for transcription (pt, en, es, auto). Default from config.
     """
     db = get_background_session()
     project = None
@@ -181,12 +198,14 @@ def process_video(project_id: int):
         with db_lock:
             project = db.query(Project).filter(Project.id == project_id).first()
             if not project:
-                print(f"⚠️ Project {project_id} not found")
+                bg_logger.warning("Project not found", project_id=project_id)
+                print(f"Project {project_id} not found")
                 return
 
             # Try to acquire processing lock
             if not project.acquire_processing_lock():
-                print(f"⚠️ Project {project_id} is already being processed")
+                bg_logger.warning("Project already being processed", project_id=project_id)
+                print(f"Project {project_id} is already being processed")
                 db.rollback()
                 return
 
@@ -194,9 +213,12 @@ def process_video(project_id: int):
             project.progress_started_at = datetime.utcnow()
             db.commit()
 
+        bg_logger.info("Starting video processing", project_id=project_id, language=language)
+
         # ========== Step 1: Download (0-15%) ==========
         if project.video_path and Path(project.video_path).exists():
-            print(f"📁 Video already exists, skipping download: {project.video_path}")
+            bg_logger.info("Video already exists, skipping download", project_id=project_id, video_path=project.video_path)
+            print(f"Video already exists, skipping download: {project.video_path}")
             update_progress(db, project, ProjectStatus.DOWNLOADING.value, 15,
                            "Vídeo já existe, pulando download...")
         else:
@@ -220,10 +242,15 @@ def process_video(project_id: int):
         update_progress(db, project, ProjectStatus.TRANSCRIBING.value, 16,
                        "Extraindo áudio do vídeo...")
 
-        update_progress(db, project, ProjectStatus.TRANSCRIBING.value, 20,
-                       "Transcrevendo com Whisper AI...")
+        # Determine language for transcription
+        transcription_language = language or DEFAULT_LANGUAGE
+        lang_name = SUPPORTED_LANGUAGES.get(transcription_language, transcription_language)
+        lang_msg = f" ({lang_name})" if transcription_language != "auto" else " (auto-detect)"
 
-        transcription = transcriber.transcribe_video(project.video_path)
+        update_progress(db, project, ProjectStatus.TRANSCRIBING.value, 20,
+                       f"Transcrevendo com Whisper AI{lang_msg}...")
+
+        transcription = transcriber.transcribe_video(project.video_path, language=transcription_language)
         project.audio_path = transcription.get('audio_path')
         project.transcription = json.dumps(transcription)
 
@@ -280,14 +307,15 @@ def process_video(project_id: int):
                 suggestion['end_time']
             )
 
-            # Add subtitles
+            # Generate subtitles (without burning - for layer system)
             words = segment.get('words', [])
             if words:
                 subtitle_result = subtitler.create_subtitled_clip(
                     video_path=clip_result['video_path'],
                     words=words,
                     clip_start_time=suggestion['start_time'],
-                    output_name=clip_name
+                    output_name=clip_name,
+                    burn_subtitles=False  # Don't burn - use layer system
                 )
             else:
                 subtitle_result = {}
@@ -304,7 +332,11 @@ def process_video(project_id: int):
                 video_path=clip_result['video_path'],
                 video_path_with_subtitles=subtitle_result.get('video_path_with_subtitles'),
                 subtitle_path=subtitle_result.get('subtitle_path'),
-                transcription_segment=json.dumps(segment)
+                subtitle_data=subtitle_result.get('subtitle_data'),
+                subtitle_file=subtitle_result.get('subtitle_file'),
+                has_burned_subtitles=subtitle_result.get('has_burned_subtitles', False),
+                transcription_segment=json.dumps(segment),
+                categoria=suggestion.get('category', 'insight')
             )
             db.add(clip)
             db.commit()
@@ -321,7 +353,13 @@ def process_video(project_id: int):
     except Exception as e:
         import traceback
         error_trace = traceback.format_exc()
-        print(f"❌ Error processing project {project_id}: {e}")
+        bg_logger.error(
+            "Error processing project",
+            project_id=project_id,
+            error=str(e),
+            traceback=error_trace
+        )
+        print(f"Error processing project {project_id}: {e}")
         print(f"   Traceback: {error_trace}")
         db.rollback()  # Rollback any pending changes
 
@@ -348,7 +386,8 @@ def process_video(project_id: int):
                 project.progress_message = user_message
                 db.commit()
         except Exception as commit_error:
-            print(f"❌ Failed to update error status: {commit_error}")
+            bg_logger.error("Failed to update error status", project_id=project_id, error=str(commit_error))
+            print(f"Failed to update error status: {commit_error}")
             db.rollback()
 
     finally:
@@ -366,14 +405,19 @@ def process_video(project_id: int):
 # ============ Project Endpoints ============
 
 @router.post("/projects", response_model=ProjectResponse)
+@limiter.limit("5/minute")
 async def create_project(
+    request: Request,
     project_data: ProjectCreate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
     """Create a new project from YouTube URL"""
+    logger.info("Create project request received", url=project_data.url)
+
     # Validate URL
     if not downloader.validate_url(project_data.url):
+        logger.warning("Invalid YouTube URL provided", url=project_data.url)
         raise HTTPException(status_code=400, detail="Invalid YouTube URL")
 
     # Extract video ID
@@ -415,8 +459,18 @@ async def create_project(
     db.commit()
     db.refresh(project)
 
-    # Start background processing
-    background_tasks.add_task(process_video, project.id)
+    # Validate and get language for transcription
+    language = project_data.language
+    if language and language not in SUPPORTED_LANGUAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported language: {language}. Supported: {', '.join(SUPPORTED_LANGUAGES.keys())}"
+        )
+
+    # Start background processing with language
+    background_tasks.add_task(process_video, project.id, language)
+
+    logger.info("Project created successfully", project_id=project.id, youtube_id=video_id, language=language)
 
     return ProjectResponse(
         id=project.id,
@@ -434,15 +488,24 @@ async def create_project(
 
 
 @router.post("/projects/upload", response_model=ProjectResponse)
+@limiter.limit("3/minute")
 async def upload_video(
+    request: Request,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    language: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
     """
     Upload a local video file (MP4, MOV, AVI, MKV, WebM)
     Max size: 500MB
+
+    Args:
+        file: Video file to upload
+        language: Language code for transcription (pt, en, es, auto). Default: pt
     """
+    logger.info("Upload request received", filename=file.filename, content_type=file.content_type)
+
     # Validate file extension
     file_ext = Path(file.filename).suffix.lower()
     if file_ext not in ALLOWED_VIDEO_EXTENSIONS:
@@ -515,8 +578,17 @@ async def upload_video(
     db.commit()
     db.refresh(project)
 
+    # Validate language if provided
+    if language and language not in SUPPORTED_LANGUAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported language: {language}. Supported: {', '.join(SUPPORTED_LANGUAGES.keys())}"
+        )
+
     # Start background processing (will skip download since video_path exists)
-    background_tasks.add_task(process_video, project.id)
+    background_tasks.add_task(process_video, project.id, language)
+
+    logger.info("Video uploaded successfully", project_id=project.id, file_id=file_id, size_mb=total_size/(1024*1024))
 
     return ProjectResponse(
         id=project.id,
@@ -534,7 +606,9 @@ async def upload_video(
 
 
 @router.get("/projects", response_model=ProjectListResponse)
+@limiter.limit("60/minute")
 async def list_projects(
+    request: Request,
     page: int = 1,
     per_page: int = 10,
     db: Session = Depends(get_db)
@@ -570,7 +644,8 @@ async def list_projects(
 
 
 @router.get("/projects/{project_id}", response_model=ProjectDetailResponse)
-async def get_project(project_id: int, db: Session = Depends(get_db)):
+@limiter.limit("60/minute")
+async def get_project(request: Request, project_id: int, db: Session = Depends(get_db)):
     """Get project details with clips"""
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
@@ -635,11 +710,14 @@ async def delete_project(project_id: int, db: Session = Depends(get_db)):
                 path.unlink()
                 deleted_files += 1
         except Exception as e:
-            print(f"⚠️ Could not delete file {file_path}: {e}")
+            logger.warning("Could not delete file", file_path=file_path, error=str(e))
+            print(f"Could not delete file {file_path}: {e}")
 
     # Delete from database (cascade will delete clips)
     db.delete(project)
     db.commit()
+
+    logger.info("Project deleted successfully", project_id=project_id, files_deleted=deleted_files)
 
     return {
         "message": "Project deleted successfully",
@@ -648,7 +726,8 @@ async def delete_project(project_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/projects/{project_id}/status", response_model=ProcessingStatus)
-async def get_project_status(project_id: int, db: Session = Depends(get_db)):
+@limiter.limit("60/minute")
+async def get_project_status(request: Request, project_id: int, db: Session = Depends(get_db)):
     """Get current processing status of a project with detailed progress"""
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
@@ -724,7 +803,8 @@ async def reprocess_project(
                     try:
                         Path(path).unlink()
                     except Exception as e:
-                        print(f"⚠️  Could not delete file {path}: {e}")
+                        logger.warning("Could not delete clip file during reprocess", file_path=path, error=str(e))
+                        print(f"Could not delete file {path}: {e}")
             db.delete(clip)
         db.commit()
 
@@ -761,7 +841,8 @@ async def reprocess_project(
 # ============ Clip Endpoints ============
 
 @router.get("/projects/{project_id}/clips", response_model=ClipListResponse)
-async def list_clips(project_id: int, db: Session = Depends(get_db)):
+@limiter.limit("60/minute")
+async def list_clips(request: Request, project_id: int, db: Session = Depends(get_db)):
     """List all clips for a project"""
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
@@ -776,7 +857,8 @@ async def list_clips(project_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/clips/{clip_id}", response_model=ClipResponse)
-async def get_clip(clip_id: int, db: Session = Depends(get_db)):
+@limiter.limit("60/minute")
+async def get_clip(request: Request, clip_id: int, db: Session = Depends(get_db)):
     """Get clip details"""
     clip = db.query(Clip).filter(Clip.id == clip_id).first()
     if not clip:
@@ -785,8 +867,35 @@ async def get_clip(clip_id: int, db: Session = Depends(get_db)):
     return ClipResponse.model_validate(clip)
 
 
+@router.put("/clips/{clip_id}/title", response_model=ClipResponse)
+async def update_clip_title(
+    clip_id: int,
+    title_data: dict,
+    db: Session = Depends(get_db)
+):
+    """Update the title of a clip"""
+    clip = db.query(Clip).filter(Clip.id == clip_id).first()
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    new_title = title_data.get("title", "").strip()
+    if not new_title:
+        raise HTTPException(status_code=400, detail="Title cannot be empty")
+
+    clip.title = new_title
+    clip.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(clip)
+
+    logger.info("Clip title updated", clip_id=clip_id, new_title=new_title)
+
+    return ClipResponse.model_validate(clip)
+
+
 @router.get("/clips/{clip_id}/download")
+@limiter.limit("60/minute")
 async def download_clip(
+    request: Request,
     clip_id: int,
     with_subtitles: bool = True,
     db: Session = Depends(get_db)
@@ -835,7 +944,8 @@ async def delete_clip(clip_id: int, db: Session = Depends(get_db)):
 # ============ Output Format Endpoints ============
 
 @router.get("/formats", response_model=OutputFormatsResponse)
-async def list_output_formats():
+@limiter.limit("60/minute")
+async def list_output_formats(request: Request):
     """List all available output formats"""
     formats = [
         OutputFormat(
@@ -853,6 +963,21 @@ async def list_output_formats():
         formats=formats,
         default=DEFAULT_OUTPUT_FORMAT
     )
+
+
+# ============ Language Endpoints ============
+
+@router.get("/languages")
+@limiter.limit("60/minute")
+async def list_supported_languages(request: Request):
+    """List all supported languages for transcription"""
+    return {
+        "languages": [
+            {"code": code, "name": name}
+            for code, name in SUPPORTED_LANGUAGES.items()
+        ],
+        "default": DEFAULT_LANGUAGE
+    }
 
 
 @router.post("/clips/{clip_id}/export")

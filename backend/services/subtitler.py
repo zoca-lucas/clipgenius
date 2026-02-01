@@ -21,6 +21,76 @@ from config import (
     SUBTITLE_MARGIN_V,
 )
 
+# =============================================================================
+# WORD_COLORS - Sistema de cores por tipo de palavra para legendas virais
+# Formato ASS: &HBBGGRR (BGR invertido, não RGB)
+# =============================================================================
+WORD_COLORS = {
+    # Amarelo (&H00FFFF) - Palavras de enfase/intensificadores
+    'emphasis': {
+        'color': '&H00FFFF',  # Amarelo
+        'words': [
+            'muito', 'muita', 'muitos', 'muitas',
+            'incrivel', 'incrível', 'incriveis', 'incríveis',
+            'absurdo', 'absurda', 'absurdos', 'absurdas',
+            'demais', 'extremamente', 'super', 'ultra', 'mega',
+            'impressionante', 'surpreendente', 'fantástico', 'fantastico',
+            'sensacional', 'espetacular', 'extraordinário', 'extraordinario',
+            'maravilhoso', 'maravilhosa', 'perfeito', 'perfeita',
+            'inacreditável', 'inacreditavel', 'insano', 'insana',
+            'brutal', 'épico', 'epico', 'lendário', 'lendario',
+            'top', 'melhor', 'pior', 'maior', 'menor',
+            'sempre', 'jamais', 'totalmente', 'completamente',
+            'absolutamente', 'definitivamente', 'obviamente',
+            'literalmente', 'basicamente', 'simplesmente',
+        ]
+    },
+    # Vermelho (&H0000FF) - Palavras negativas/alertas
+    'negative': {
+        'color': '&H0000FF',  # Vermelho
+        'words': [
+            'não', 'nao', 'nunca', 'jamais',
+            'errado', 'errada', 'errados', 'erradas',
+            'erro', 'erros', 'falha', 'falhas',
+            'problema', 'problemas', 'cuidado', 'atenção', 'atencao',
+            'perigo', 'perigoso', 'perigosa', 'alerta',
+            'evite', 'evitar', 'pare', 'parar', 'parou',
+            'ruim', 'péssimo', 'pessimo', 'horrível', 'horrivel',
+            'terrível', 'terrivel', 'negativo', 'negativa',
+            'proibido', 'proibida', 'ilegal', 'crime',
+            'mentira', 'fake', 'falso', 'falsa',
+            'fracasso', 'fracassou', 'perdeu', 'perdido',
+            'morreu', 'morte', 'fim', 'acabou',
+        ]
+    },
+    # Verde (&H00FF00) - Numeros e estatisticas
+    'numbers': {
+        'color': '&H00FF00',  # Verde
+        'words': [
+            # Numeros por extenso
+            'zero', 'um', 'uma', 'dois', 'duas', 'três', 'tres',
+            'quatro', 'cinco', 'seis', 'sete', 'oito', 'nove', 'dez',
+            'onze', 'doze', 'treze', 'quatorze', 'quinze',
+            'dezesseis', 'dezessete', 'dezoito', 'dezenove', 'vinte',
+            'trinta', 'quarenta', 'cinquenta', 'sessenta',
+            'setenta', 'oitenta', 'noventa', 'cem', 'mil', 'milhão', 'milhao',
+            'bilhão', 'bilhao', 'trilhão', 'trilhao',
+            # Palavras relacionadas a estatisticas
+            'porcentagem', 'percentual', 'média', 'media',
+            'estatística', 'estatistica', 'dados', 'números', 'numeros',
+            'ranking', 'posição', 'posicao', 'lugar', 'primeiro', 'segunda',
+            'terceiro', 'último', 'ultimo', 'recorde', 'record',
+            'resultado', 'resultados', 'total', 'soma',
+            'dobro', 'triplo', 'metade', 'quarto',
+        ]
+    },
+    # Branco (&H00FFFFFF) - Cor padrao (default)
+    'default': {
+        'color': '&H00FFFFFF',  # Branco
+        'words': []  # Todas as outras palavras
+    }
+}
+
 
 class SubtitleGenerator:
     """Service to generate and apply subtitles to video clips"""
@@ -61,6 +131,89 @@ class SubtitleGenerator:
 
     def __init__(self):
         self.clips_dir = CLIPS_DIR
+        # Construir lookup dict para cores de palavras (lowercase para busca rapida)
+        self._word_color_lookup = self._build_word_color_lookup()
+
+    def _build_word_color_lookup(self) -> Dict[str, str]:
+        """
+        Constroi um dicionario de lookup para cores de palavras.
+
+        Returns:
+            Dict mapeando palavra (lowercase) -> cor ASS
+        """
+        lookup = {}
+        for category, data in WORD_COLORS.items():
+            if category == 'default':
+                continue
+            color = data['color']
+            for word in data['words']:
+                lookup[word.lower()] = color
+        return lookup
+
+    def _get_word_color(self, word: str) -> str:
+        """
+        Retorna a cor ASS para uma palavra baseado no tipo.
+
+        Args:
+            word: A palavra para buscar cor
+
+        Returns:
+            Cor no formato ASS (&HBBGGRR)
+        """
+        # Limpar palavra (remover pontuacao)
+        clean_word = re.sub(r'[^\w]', '', word.lower())
+
+        # Verificar se e um numero
+        if clean_word.isdigit() or re.match(r'^\d+[%kmb]?$', clean_word, re.IGNORECASE):
+            return WORD_COLORS['numbers']['color']
+
+        # Buscar no lookup
+        return self._word_color_lookup.get(clean_word, WORD_COLORS['default']['color'])
+
+    def _colorize_text_ass(self, words: List[Dict[str, Any]], capitalize: bool = True) -> str:
+        """
+        Gera texto ASS com cores por palavra.
+
+        Cada palavra recebe uma tag de cor baseada no seu tipo:
+        - Enfase (muito, incrivel) -> Amarelo
+        - Negativo (nao, nunca) -> Vermelho
+        - Numeros/Estatisticas -> Verde
+        - Default -> Branco
+
+        Args:
+            words: Lista de dicts com 'word'
+            capitalize: Aplicar capitalizacao
+
+        Returns:
+            Texto formatado com tags ASS de cor
+        """
+        if not words:
+            return ""
+
+        colored_parts = []
+        default_color = WORD_COLORS['default']['color']
+
+        for i, word_dict in enumerate(words):
+            word = word_dict.get('word', '').strip()
+            if not word:
+                continue
+
+            # Aplicar capitalizacao na primeira palavra
+            if capitalize and i == 0 and word:
+                word = word[0].upper() + word[1:].lower() if len(word) > 1 else word.upper()
+            elif capitalize:
+                word = word.lower()
+
+            # Obter cor para a palavra
+            color = self._get_word_color(word)
+
+            # Adicionar tag de cor se nao for a cor padrao
+            if color != default_color:
+                colored_parts.append(f"{{\\1c{color}}}{word}{{\\1c{default_color}}}")
+            else:
+                colored_parts.append(word)
+
+        return ' '.join(colored_parts)
 
     def _format_srt_time(self, seconds: float) -> str:
         """Convert seconds to SRT timestamp format (HH:MM:SS,mmm)"""
@@ -102,15 +255,20 @@ class SubtitleGenerator:
         self,
         words: List[Dict[str, Any]],
         max_chars: int = 42,
-        max_words: int = 6
+        max_words: int = 6,
+        max_pause: float = 0.4,
+        max_duration: float = 3.0
     ) -> List[List[Dict[str, Any]]]:
         """
-        Chunk words into subtitle-friendly groups based on character limit
+        Chunk words into subtitle-friendly groups based on character limit,
+        pause detection, and maximum duration.
 
         Args:
-            words: List of word dicts
+            words: List of word dicts with 'word', 'start', 'end'
             max_chars: Maximum characters per subtitle line
             max_words: Maximum words per subtitle line
+            max_pause: Maximum pause between words before forcing new chunk (seconds)
+            max_duration: Maximum duration for a single subtitle (seconds)
 
         Returns:
             List of word chunks
@@ -118,10 +276,16 @@ class SubtitleGenerator:
         chunks = []
         current_chunk = []
         current_length = 0
+        chunk_start_time = None
 
-        for word_dict in words:
+        for i, word_dict in enumerate(words):
             word = word_dict.get('word', '').strip()
+            if not word:
+                continue
+
             word_len = len(word)
+            word_start = word_dict.get('start', 0)
+            word_end = word_dict.get('end', 0)
 
             # Check if adding this word would exceed limits
             if current_chunk:
@@ -129,16 +293,44 @@ class SubtitleGenerator:
             else:
                 new_length = word_len
 
-            if (current_chunk and
-                (new_length > max_chars or len(current_chunk) >= max_words)):
+            # Detect pause from previous word
+            pause_detected = False
+            if current_chunk:
+                prev_word = current_chunk[-1]
+                prev_end = prev_word.get('end', 0)
+                pause = word_start - prev_end
+                if pause > max_pause:
+                    pause_detected = True
+
+            # Check if subtitle duration would be too long
+            duration_exceeded = False
+            if chunk_start_time is not None:
+                chunk_duration = word_end - chunk_start_time
+                if chunk_duration > max_duration:
+                    duration_exceeded = True
+
+            # Decide if we need to start a new chunk
+            should_start_new = (
+                current_chunk and (
+                    new_length > max_chars or
+                    len(current_chunk) >= max_words or
+                    pause_detected or
+                    duration_exceeded
+                )
+            )
+
+            if should_start_new:
                 # Start new chunk
                 chunks.append(current_chunk)
                 current_chunk = [word_dict]
                 current_length = word_len
+                chunk_start_time = word_start
             else:
                 # Add to current chunk
                 current_chunk.append(word_dict)
                 current_length = new_length
+                if chunk_start_time is None:
+                    chunk_start_time = word_start
 
         # Add last chunk
         if current_chunk:
@@ -217,10 +409,11 @@ class SubtitleGenerator:
         video_width: int = 1080,
         video_height: int = 1920,
         max_chars_per_line: int = 42,
-        capitalize: bool = True
+        capitalize: bool = True,
+        colorize_words: bool = True
     ) -> str:
         """
-        Generate ASS subtitle file with styling
+        Generate ASS subtitle file with styling and word-based coloring
 
         Args:
             words: List of word dicts
@@ -232,6 +425,7 @@ class SubtitleGenerator:
             video_height: Video height for positioning
             max_chars_per_line: Maximum characters per line
             capitalize: Apply proper capitalization
+            colorize_words: Apply color coding by word type (default: True)
 
         Returns:
             Path to generated ASS file
@@ -273,11 +467,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             start_time = max(0, start_time)
             end_time = max(start_time + 0.1, end_time)
 
-            text = ' '.join(w.get('word', '') for w in chunk).strip()
-
-            # Apply capitalization if requested
-            if capitalize:
-                text = self._capitalize_text(text)
+            # Apply word coloring if enabled
+            if colorize_words:
+                text = self._colorize_text_ass(chunk, capitalize=capitalize)
+            else:
+                text = ' '.join(w.get('word', '') for w in chunk).strip()
+                # Apply capitalization if requested
+                if capitalize:
+                    text = self._capitalize_text(text)
 
             if text:
                 start_str = self._format_ass_time(start_time)
@@ -296,20 +493,28 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         highlight_color: str = None,
         scale_effect: bool = True,
         scale_amount: int = 110,
-        capitalize: bool = True
+        capitalize: bool = True,
+        colorize_words: bool = True
     ) -> str:
         r"""
-        Generate a single ASS dialogue line with karaoke timing tags.
+        Generate a single ASS dialogue line with karaoke timing tags and word-based coloring.
 
-        Each word gets a \k tag for timing, color highlight, and optional scale animation.
-        Example output: {\k50\1c&H00FFFF&\t(0,500,\fscx110\fscy110)}Olá {\k40}pessoal
+        Each word gets a \k tag for timing, color based on word type, and optional scale animation.
+        Example output: {\k50\1c&H00FFFF&\t(0,500,\fscx110\fscy110)}Muito {\k40\1c&H00FF00&}10
+
+        Color coding:
+        - Emphasis words (muito, incrivel) -> Yellow
+        - Negative words (nao, nunca) -> Red
+        - Numbers/Statistics -> Green
+        - Default -> highlight_color (or config color)
 
         Args:
             words: List of word dicts with 'word', 'start', 'end' (already offset-adjusted)
-            highlight_color: Color for active word (ASS format)
+            highlight_color: Fallback color for default words (ASS format)
             scale_effect: Whether to add scale pop effect
             scale_amount: Scale percentage (e.g., 110 = 110%)
             capitalize: Apply proper capitalization
+            colorize_words: Apply color coding by word type (default: True)
 
         Returns:
             ASS dialogue text with karaoke tags
@@ -337,8 +542,17 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             # \t(t1,t2,\fscx\fscy) = animation for scale effect
             tag = f"\\k{duration_cs}"
 
+            # Determine word color based on type (or use highlight_color as fallback)
+            if colorize_words:
+                word_color = self._get_word_color(word)
+                # If default white, use the highlight color for karaoke effect
+                if word_color == WORD_COLORS['default']['color']:
+                    word_color = highlight_color
+            else:
+                word_color = highlight_color
+
             # Add color tag
-            tag += f"\\1c{highlight_color}"
+            tag += f"\\1c{word_color}"
 
             # Add scale animation if enabled
             if scale_effect:
@@ -376,12 +590,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         capitalize: bool = True,
         highlight_color: str = None,
         scale_effect: bool = None,
-        scale_amount: int = None
+        scale_amount: int = None,
+        colorize_words: bool = True
     ) -> str:
         """
         Generate ASS subtitle file with karaoke word-by-word highlighting effect.
 
         Creates TikTok/Reels style subtitles where each word highlights as it's spoken.
+        Now with word-type color coding for viral effect!
 
         Args:
             words: List of word dicts with 'word', 'start', 'end'
@@ -396,6 +612,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             highlight_color: Color for active word (overrides config)
             scale_effect: Whether to add scale pop effect (overrides config)
             scale_amount: Scale percentage (overrides config)
+            colorize_words: Apply color coding by word type (default: True)
 
         Returns:
             Path to generated ASS file
@@ -452,13 +669,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 adjusted_word['end'] = max(0, word_dict.get('end', 0) - offset)
                 adjusted_chunk.append(adjusted_word)
 
-            # Generate karaoke dialogue with word-by-word timing
+            # Generate karaoke dialogue with word-by-word timing and color coding
             karaoke_text = self._generate_karaoke_dialogue(
                 words=adjusted_chunk,
                 highlight_color=highlight_color,
                 scale_effect=scale_effect,
                 scale_amount=scale_amount,
-                capitalize=capitalize
+                capitalize=capitalize,
+                colorize_words=colorize_words
             )
 
             if karaoke_text:
@@ -685,10 +903,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         style: Optional[Dict[str, Any]] = None,
         max_chars_per_line: int = 42,
         capitalize: bool = True,
-        enable_karaoke: bool = None
+        enable_karaoke: bool = None,
+        burn_subtitles: bool = False
     ) -> Dict[str, Any]:
         """
-        Generate subtitles and burn them into a clip
+        Generate subtitles and optionally burn them into a clip
 
         Args:
             video_path: Path to clip video
@@ -700,15 +919,25 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             max_chars_per_line: Maximum characters per line (default: 42)
             capitalize: Apply proper capitalization (default: True)
             enable_karaoke: Enable karaoke word-by-word highlighting (default: from config)
+            burn_subtitles: Whether to burn subtitles into video (default: False for layer system)
 
         Returns:
-            Dict with paths to subtitle file and subtitled video
+            Dict with paths to subtitle file, optionally subtitled video, and subtitle_data for editor
         """
         video_path = Path(video_path)
 
         # Use config default if not specified
         if enable_karaoke is None:
             enable_karaoke = SUBTITLE_KARAOKE_ENABLED
+
+        # Build subtitle data structure for the editor
+        subtitle_data = self._build_subtitle_data(
+            words=words,
+            offset=clip_start_time,
+            words_per_line=words_per_line,
+            max_chars_per_line=max_chars_per_line,
+            capitalize=capitalize
+        )
 
         if enable_karaoke:
             # Generate ASS subtitles with karaoke effect (TikTok/Reels style)
@@ -724,21 +953,32 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             )
             subtitle_path = ass_path
 
-            # Burn ASS subtitles into video
-            output_path = self.clips_dir / f"{output_name}_subtitled.mp4"
-            burn_result = self.burn_subtitles(
-                video_path=str(video_path),
-                subtitle_path=str(ass_path),
-                output_path=str(output_path)
-            )
-
-            return {
+            result = {
                 'subtitle_path': str(ass_path),
-                'video_path_with_subtitles': str(burn_result),
-                'subtitles_burned': True,
-                'subtitle_message': 'Legendas karaoke queimadas com sucesso',
+                'subtitle_file': str(ass_path),
+                'subtitle_data': subtitle_data,
                 'karaoke_enabled': True
             }
+
+            if burn_subtitles:
+                # Burn ASS subtitles into video
+                output_path = self.clips_dir / f"{output_name}_subtitled.mp4"
+                burn_result = self.burn_subtitles(
+                    video_path=str(video_path),
+                    subtitle_path=str(ass_path),
+                    output_path=str(output_path)
+                )
+                result['video_path_with_subtitles'] = str(burn_result)
+                result['subtitles_burned'] = True
+                result['has_burned_subtitles'] = True
+                result['subtitle_message'] = 'Legendas karaoke queimadas com sucesso'
+            else:
+                result['video_path_with_subtitles'] = None
+                result['subtitles_burned'] = False
+                result['has_burned_subtitles'] = False
+                result['subtitle_message'] = 'Legendas geradas (não queimadas)'
+
+            return result
         else:
             # Generate SRT subtitles with simple formatting (original behavior)
             srt_path = self.clips_dir / f"{output_name}.srt"
@@ -751,21 +991,172 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 capitalize=capitalize
             )
 
-            # Burn subtitles into video
-            output_path = self.clips_dir / f"{output_name}_subtitled.mp4"
-            burn_result = self.burn_subtitles_drawtext(
+            result = {
+                'subtitle_path': str(srt_path),
+                'subtitle_file': str(srt_path),
+                'subtitle_data': subtitle_data,
+                'karaoke_enabled': False
+            }
+
+            if burn_subtitles:
+                # Burn subtitles into video
+                output_path = self.clips_dir / f"{output_name}_subtitled.mp4"
+                burn_result = self.burn_subtitles_drawtext(
+                    video_path=str(video_path),
+                    srt_path=str(srt_path),
+                    output_path=str(output_path)
+                )
+                result['video_path_with_subtitles'] = burn_result['path']
+                result['subtitles_burned'] = burn_result.get('subtitles_burned', False)
+                result['has_burned_subtitles'] = burn_result.get('subtitles_burned', False)
+                result['subtitle_message'] = burn_result.get('message', '')
+            else:
+                result['video_path_with_subtitles'] = None
+                result['subtitles_burned'] = False
+                result['has_burned_subtitles'] = False
+                result['subtitle_message'] = 'Legendas geradas (não queimadas)'
+
+            return result
+
+    def _build_subtitle_data(
+        self,
+        words: List[Dict[str, Any]],
+        offset: float,
+        words_per_line: int = 6,
+        max_chars_per_line: int = 42,
+        capitalize: bool = True
+    ) -> List[Dict[str, Any]]:
+        """
+        Build subtitle data structure for the editor
+
+        Args:
+            words: List of word dicts with 'word', 'start', 'end'
+            offset: Time offset to subtract
+            words_per_line: Max words per subtitle line
+            max_chars_per_line: Maximum characters per line
+            capitalize: Apply proper capitalization
+
+        Returns:
+            List of subtitle entries with start, end, text, and words
+        """
+        chunks = self._chunk_words_by_length(words, max_chars_per_line, words_per_line)
+        subtitle_data = []
+
+        for i, chunk in enumerate(chunks):
+            if not chunk:
+                continue
+
+            start_time = chunk[0].get('start', 0) - offset
+            end_time = chunk[-1].get('end', 0) - offset
+
+            start_time = max(0, start_time)
+            end_time = max(start_time + 0.1, end_time)
+
+            text = ' '.join(w.get('word', '') for w in chunk).strip()
+
+            if capitalize:
+                text = self._capitalize_text(text)
+
+            if text:
+                # Adjust word timings for offset
+                adjusted_words = []
+                for w in chunk:
+                    adjusted_words.append({
+                        'word': w.get('word', ''),
+                        'start': max(0, w.get('start', 0) - offset),
+                        'end': max(0, w.get('end', 0) - offset)
+                    })
+
+                subtitle_data.append({
+                    'id': f'sub_{i}',
+                    'start': start_time,
+                    'end': end_time,
+                    'text': text,
+                    'words': adjusted_words
+                })
+
+        return subtitle_data
+
+    def burn_subtitles_on_demand(
+        self,
+        video_path: str,
+        subtitle_data: List[Dict[str, Any]],
+        output_path: str,
+        style: Optional[Dict[str, Any]] = None,
+        enable_karaoke: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Burn subtitles into video on demand (for export)
+
+        Args:
+            video_path: Path to input video (without burned subtitles)
+            subtitle_data: List of subtitle entries with start, end, text, words
+            output_path: Output video path
+            style: Custom subtitle style
+            enable_karaoke: Enable karaoke effect
+
+        Returns:
+            Dict with path and status
+        """
+        video_path = Path(video_path)
+        output_path = Path(output_path)
+
+        # Convert subtitle_data to words format for ASS generation
+        all_words = []
+        for entry in subtitle_data:
+            words = entry.get('words', [])
+            if words:
+                all_words.extend(words)
+            else:
+                # Fallback: create simple word entries from text
+                text = entry.get('text', '')
+                start = entry.get('start', 0)
+                end = entry.get('end', 0)
+                word_list = text.split()
+                if word_list:
+                    duration_per_word = (end - start) / len(word_list)
+                    for j, word in enumerate(word_list):
+                        all_words.append({
+                            'word': word,
+                            'start': start + j * duration_per_word,
+                            'end': start + (j + 1) * duration_per_word
+                        })
+
+        # Generate temporary ASS file
+        temp_ass = output_path.parent / f"{output_path.stem}_temp.ass"
+
+        if enable_karaoke:
+            self.generate_ass_karaoke(
+                words=all_words,
+                output_path=str(temp_ass),
+                offset=0,  # Already offset-adjusted
+                style=style
+            )
+        else:
+            self.generate_ass(
+                words=all_words,
+                output_path=str(temp_ass),
+                offset=0,
+                style=style
+            )
+
+        # Burn subtitles
+        try:
+            burn_result = self.burn_subtitles(
                 video_path=str(video_path),
-                srt_path=str(srt_path),
+                subtitle_path=str(temp_ass),
                 output_path=str(output_path)
             )
 
             return {
-                'subtitle_path': str(srt_path),
-                'video_path_with_subtitles': burn_result['path'],
-                'subtitles_burned': burn_result.get('subtitles_burned', False),
-                'subtitle_message': burn_result.get('message', ''),
-                'karaoke_enabled': False
+                'path': str(burn_result),
+                'subtitles_burned': True,
+                'message': 'Legendas queimadas com sucesso'
             }
+        finally:
+            # Cleanup temp ASS file
+            if temp_ass.exists():
+                temp_ass.unlink()
 
 
 # Quick test

@@ -20,44 +20,85 @@ from config import (
     MINIMAX_BASE_URL,
     AI_PROVIDER
 )
+from logging_config import get_service_logger
+
+logger = get_service_logger("analyzer")
 
 
 class ClipAnalyzer:
     """Service to analyze transcription and suggest viral clips using Groq, Minimax, or Ollama"""
 
-    ANALYSIS_PROMPT = """Você é um especialista em conteúdo viral para redes sociais (TikTok, Reels, Shorts).
+    ANALYSIS_PROMPT = """🎯 SISTEMA ESPECIALIZADO EM ANÁLISE E GERAÇÃO DE CORTES VIRAIS PARA TIKTOK
 
-Analise a transcrição abaixo de um vídeo do YouTube e identifique os {num_clips} MELHORES momentos para criar cortes virais.
+Você é um ANALISTA EXPERT em conteúdo viral que aplica:
+- Raciocínio MINIMAX (maximizar chance de viralização, minimizar risco de cortes fracos)
+- Conhecimento profundo de padrões virais do TikTok
 
-⚠️ REGRA CRÍTICA DE DURAÇÃO:
-- MÍNIMO: {min_duration} segundos (ex: 00:00 até 00:20 = 20 segundos ✓)
-- MÁXIMO: {max_duration} segundos
-- Cortes muito curtos serão REJEITADOS! Garanta que (timestamp_fim - timestamp_inicio) >= {min_duration}s
+⚠️ REGRA CRÍTICA: NUNCA retorne zero cortes. SEMPRE selecione pelo menos 1 corte, mesmo que o conteúdo seja fraco.
 
-OUTRAS REGRAS:
-1. O corte deve começar com um GANCHO forte (frase que prende atenção)
-2. O corte deve ter uma ideia COMPLETA (não cortar no meio de um raciocínio)
-3. Priorize momentos com: emoção, polêmica, humor, insights únicos, frases de impacto
-4. Os cortes NÃO devem se sobrepor (timestamps únicos)
-5. Ordene do MELHOR para o pior (maior nota primeiro)
+📊 PARÂMETROS:
+- CORTES SOLICITADOS: {num_clips}
+- DURAÇÃO MÍNIMA: {min_duration}s | MÁXIMA: {max_duration}s
+- DURAÇÃO IDEAL: 15-45 segundos (OBRIGATÓRIO para TikTok viral)
+- ⚠️ CLIPS MENORES QUE {min_duration}s SERÃO REJEITADOS AUTOMATICAMENTE
 
-CRITÉRIOS DE AVALIAÇÃO (nota de 0 a 10):
-- Gancho inicial forte (0-2 pts): A primeira frase prende atenção?
-- Conteúdo emocional/polêmico (0-2 pts): Gera reação emocional?
-- Frase de impacto/citável (0-2 pts): Tem frases que as pessoas vão querer compartilhar?
-- Completude da ideia (0-2 pts): O pensamento está completo?
-- Potencial de compartilhamento (0-2 pts): As pessoas vão querer enviar para amigos?
+🔍 FLUXO DE ANÁLISE (SIGA RIGOROSAMENTE):
 
-TRANSCRIÇÃO COM TIMESTAMPS:
+**1. MAPEAMENTO ESTRUTURAL**
+Identifique na transcrição:
+- Introdução, desenvolvimento, pontos de virada, clímax, fechamento
+- Frases de IMPACTO EXTREMO (choque, revelação, gatilhos fortes)
+- Momentos de EMOÇÃO INTENSA (medo, tensão, raiva, surpresa, curiosidade, riso)
+- GATILHOS TIKTOK: "ninguém te conta isso", "olha isso aqui", "você está fazendo errado", "isso mudou minha vida"
+
+**2. IDENTIFICAÇÃO DE HOOKS VIRAIS**
+Para cada corte, a PRIMEIRA FRASE deve:
+- Criar CURIOSIDADE imediata (o viewer PRECISA saber o que vem depois)
+- Gerar CHOQUE ou POLÊMICA (declaração ousada)
+- Provocar IDENTIFICAÇÃO ("isso sou eu", "já passei por isso")
+- Criar TENSÃO ou MEDO (alerta, consequência negativa)
+
+**3. CRITÉRIO MINIMAX DE DECISÃO**
+Para cada trecho candidato, avalie:
+- PAYOFF: Potencial de views/engajamento (0-10)
+- RISCO: Chance de ser desinteressante/confuso (0-10)
+- ESCOLHA: Maximize payoff, minimize risco
+
+**4. PONTUAÇÃO VIRAL (nota_viral 0-10):**
+
+| Critério | Pontos | Descrição |
+|----------|--------|-----------|
+| HOOK | 0-2 | Primeiros 3 segundos PRENDEM? Curiosidade/choque/emoção forte? |
+| RETENÇÃO | 0-2 | Vale rewatch? Loop natural? Densidade de valor por segundo? |
+| ENGAJAMENTO | 0-2 | Gera comentários? Debate? Relatabilidade? |
+| COMPARTILHAMENTO | 0-2 | Frase quotável? Meme potential? Enviaria para amigo? |
+| COMPLETUDE | 0-2 | Ideia fechada? Twist/revelação? Não precisa de contexto extra? |
+
+**5. REGRAS DE VALIDAÇÃO:**
+- Cortes NÃO podem se sobrepor (timestamps únicos)
+- Ordene do MELHOR para o PIOR (maior nota primeiro)
+- Se não encontrar {num_clips} cortes PERFEITOS, inclua os MELHORES DISPONÍVEIS
+- NUNCA retorne lista vazia - sempre há pelo menos 1 trecho utilizável
+
+📝 TRANSCRIÇÃO PARA ANÁLISE:
 {transcription}
 
-FORMATO DE RESPOSTA - Responda APENAS com este JSON (sem texto antes ou depois):
+📦 RESPONDA APENAS COM JSON VÁLIDO:
 {{"clips": [
-  {{"timestamp_inicio": "MM:SS", "timestamp_fim": "MM:SS", "titulo": "Título curto", "nota_viral": 8.5, "justificativa": "Por que é viral", "gancho": "Primeira frase"}}
+  {{
+    "timestamp_inicio": "MM:SS",
+    "timestamp_fim": "MM:SS",
+    "titulo": "Título chamativo e curto (máx 60 chars)",
+    "nota_viral": 8.5,
+    "justificativa": "Por que vai viralizar (mencione critérios específicos)",
+    "gancho": "Primeira frase exata do corte (pode adaptar levemente para mais impacto)",
+    "categoria": "curiosidade|medo|polêmica|revelação|identificação|humor",
+    "cta_sugerido": "Pergunta para engajar nos comentários"
+  }}
 ]}}
 
-Lembre-se: cada corte deve ter NO MÍNIMO {min_duration} segundos de duração!
-Retorne EXATAMENTE {num_clips} cortes."""
+🎯 MISSÃO: Retorne EXATAMENTE {num_clips} cortes com maior potencial viral, ordenados do MELHOR para o PIOR.
+Se o vídeo for curto ou fraco, ainda assim retorne o máximo de cortes viáveis (mínimo 1)."""
 
     def __init__(self, provider: str = None):
         """
@@ -81,7 +122,8 @@ Retorne EXATAMENTE {num_clips} cortes."""
             self.base_url = OLLAMA_BASE_URL
             self._verify_ollama()
 
-        print(f"🤖 AI Provider: {self.provider.upper()} ({self.model})")
+        logger.info("AI provider initialized", provider=self.provider.upper(), model=self.model)
+        print(f"AI Provider: {self.provider.upper()} ({self.model})")
 
     def _determine_provider(self, provider: str = None) -> str:
         """Determine which AI provider to use"""
@@ -95,7 +137,8 @@ Retorne EXATAMENTE {num_clips} cortes."""
             elif MINIMAX_API_KEY and MINIMAX_API_KEY.strip() and not MINIMAX_API_KEY.startswith("your-"):
                 return "minimax"
             else:
-                print("⚠️  Nenhuma API key configurada, usando Ollama local")
+                logger.warning("No API key configured, falling back to local Ollama")
+                print("No API key configured, using local Ollama")
                 return "ollama"
 
         return provider
@@ -120,10 +163,13 @@ Retorne EXATAMENTE {num_clips} cortes."""
                 timeout=10
             )
             if response.status_code != 200:
+                logger.error("Groq API connection failed", status_code=response.status_code)
                 raise ConnectionError(f"Groq API error: {response.status_code}")
-            print("✅ Groq API conectada com sucesso!")
-        except httpx.ConnectError:
-            raise ConnectionError("❌ Não foi possível conectar à API do Groq")
+            logger.info("Groq API connected successfully")
+            print("Groq API connected successfully!")
+        except httpx.ConnectError as e:
+            logger.error("Failed to connect to Groq API", error=str(e))
+            raise ConnectionError("Could not connect to Groq API")
 
     def _verify_minimax(self):
         """Verify Minimax API key is configured"""
@@ -155,10 +201,13 @@ Retorne EXATAMENTE {num_clips} cortes."""
             )
             # Accept 200 (success) or 400 (bad request but API is reachable)
             if response.status_code not in [200, 400]:
+                logger.error("Minimax API connection failed", status_code=response.status_code)
                 raise ConnectionError(f"Minimax API error: {response.status_code}")
-            print("✅ Minimax API conectada com sucesso!")
-        except httpx.ConnectError:
-            raise ConnectionError("❌ Não foi possível conectar à API do Minimax")
+            logger.info("Minimax API connected successfully")
+            print("Minimax API connected successfully!")
+        except httpx.ConnectError as e:
+            logger.error("Failed to connect to Minimax API", error=str(e))
+            raise ConnectionError("Could not connect to Minimax API")
 
     def _verify_ollama(self):
         """Verify Ollama is running and model is available"""
@@ -171,19 +220,25 @@ Retorne EXATAMENTE {num_clips} cortes."""
             model_names = [m.get("name", "").split(":")[0] for m in models]
 
             if self.model not in model_names and f"{self.model}:latest" not in [m.get("name") for m in models]:
-                available = ", ".join(model_names) if model_names else "nenhum"
-                print(f"⚠️  Modelo '{self.model}' não encontrado.")
-                print(f"   Modelos disponíveis: {available}")
-                print(f"   Execute: ollama pull {self.model}")
+                available = ", ".join(model_names) if model_names else "none"
+                logger.warning(
+                    "Ollama model not found",
+                    requested_model=self.model,
+                    available_models=available
+                )
+                print(f"Model '{self.model}' not found.")
+                print(f"   Available models: {available}")
+                print(f"   Run: ollama pull {self.model}")
 
-        except httpx.ConnectError:
+        except httpx.ConnectError as e:
+            logger.error("Ollama is not running", error=str(e))
             raise ConnectionError(
-                "\n❌ Ollama não está rodando!\n"
+                "\nOllama is not running!\n"
                 "   \n"
-                "   Para instalar e iniciar:\n"
-                "   1. Instale: https://ollama.ai\n"
-                "   2. Execute: ollama serve\n"
-                "   3. Baixe um modelo: ollama pull llama3.2\n"
+                "   To install and start:\n"
+                "   1. Install: https://ollama.ai\n"
+                "   2. Run: ollama serve\n"
+                "   3. Pull a model: ollama pull llama3.2\n"
             )
 
     def _format_transcription_for_prompt(self, transcription: Dict[str, Any]) -> str:
@@ -217,7 +272,8 @@ Retorne EXATAMENTE {num_clips} cortes."""
 
     def _call_groq(self, prompt: str) -> str:
         """Call Groq API (OpenAI-compatible)"""
-        print(f"⚡ Chamando Groq ({self.model})... (muito mais rápido!)")
+        logger.info("Calling Groq API", model=self.model)
+        print(f"Calling Groq ({self.model})...")
 
         response = httpx.post(
             "https://api.groq.com/openai/v1/chat/completions",
@@ -245,13 +301,15 @@ Retorne EXATAMENTE {num_clips} cortes."""
 
         if response.status_code != 200:
             error_detail = response.json().get("error", {}).get("message", response.text)
+            logger.error("Groq API request failed", status_code=response.status_code, error=error_detail)
             raise Exception(f"Groq API error: {error_detail}")
 
         return response.json()["choices"][0]["message"]["content"]
 
     def _call_minimax(self, prompt: str) -> str:
         """Call Minimax API (Anthropic-compatible endpoint)"""
-        print(f"⚡ Chamando Minimax ({self.model})...")
+        logger.info("Calling Minimax API", model=self.model)
+        print(f"Calling Minimax ({self.model})...")
 
         # Build the system prompt and user message
         system_prompt = "Você é um assistente especializado em análise de conteúdo viral. Sempre responda em JSON válido."
@@ -280,6 +338,7 @@ Retorne EXATAMENTE {num_clips} cortes."""
 
         if response.status_code != 200:
             error_detail = response.json().get("error", {}).get("message", response.text)
+            logger.error("Minimax API request failed", status_code=response.status_code, error=error_detail)
             raise Exception(f"Minimax API error: {error_detail}")
 
         # Anthropic format returns content as a list of blocks
@@ -294,7 +353,8 @@ Retorne EXATAMENTE {num_clips} cortes."""
 
     def _call_ollama(self, prompt: str) -> str:
         """Call Ollama API"""
-        print(f"🤖 Chamando Ollama ({self.model})...")
+        logger.info("Calling Ollama API", model=self.model)
+        print(f"Calling Ollama ({self.model})...")
 
         response = httpx.post(
             f"{self.base_url}/api/generate",
@@ -311,6 +371,7 @@ Retorne EXATAMENTE {num_clips} cortes."""
         )
 
         if response.status_code != 200:
+            logger.error("Ollama API request failed", status_code=response.status_code, error=response.text)
             raise Exception(f"Ollama error: {response.text}")
 
         return response.json().get("response", "")
@@ -350,7 +411,8 @@ Retorne EXATAMENTE {num_clips} cortes."""
                 return {"clips": clips}
 
         # Return empty result
-        print("❌ Não foi possível extrair JSON válido da resposta")
+        logger.error("Failed to extract valid JSON from AI response", response_preview=text[:200])
+        print("Could not extract valid JSON from response")
         return {"clips": []}
 
     def analyze(
@@ -397,13 +459,22 @@ Retorne EXATAMENTE {num_clips} cortes."""
 
         provider_names = {"groq": "Groq", "minimax": "Minimax", "ollama": "Ollama"}
         provider_name = provider_names.get(self.provider, self.provider)
-        print(f"📊 Analisando transcrição com {provider_name}... (solicitando {num_clips} cortes)")
+        logger.info(
+            "Starting transcription analysis",
+            provider=provider_name,
+            num_clips_requested=num_clips,
+            min_duration=min_duration,
+            max_duration=max_duration,
+            segments_count=len(segments)
+        )
+        print(f"Analyzing transcription with {provider_name}... (requesting {num_clips} clips)")
 
         # Call AI
         response_text = self._call_ai(prompt)
 
         # Debug: show first 500 chars of response
-        print(f"📝 Resposta da IA (primeiros 500 chars):")
+        logger.debug("AI response received", response_length=len(response_text), preview=response_text[:200])
+        print(f"AI Response (first 500 chars):")
         print(response_text[:500] if len(response_text) > 500 else response_text)
         print("---")
 
@@ -420,13 +491,16 @@ Retorne EXATAMENTE {num_clips} cortes."""
                 raise ValueError("No JSON found in response")
 
         except json.JSONDecodeError as e:
-            print(f"⚠️  Erro ao parsear JSON: {e}")
-            print(f"   Tentando recuperar...")
+            logger.warning("JSON parse error, attempting recovery", error=str(e))
+            print(f"JSON parse error: {e}")
+            print(f"   Attempting recovery...")
             result = self._try_fix_json(response_text)
 
         # Process clips
         clips = []
-        print(f"📋 Processando {len(result.get('clips', []))} clips da resposta...")
+        raw_clips_count = len(result.get('clips', []))
+        logger.info("Processing clips from AI response", raw_clips_count=raw_clips_count)
+        print(f"Processing {raw_clips_count} clips from response...")
         for i, clip_data in enumerate(result.get('clips', [])):
             start_seconds = self._parse_timestamp(clip_data.get('timestamp_inicio', '00:00'))
             end_seconds = self._parse_timestamp(clip_data.get('timestamp_fim', '00:00'))
@@ -436,12 +510,14 @@ Retorne EXATAMENTE {num_clips} cortes."""
 
             # Validate clip duration using configured minimum
             if duration < min_duration:
-                print(f"   ⚠️  Rejeitado: duração muito curta ({duration}s < {min_duration}s)")
+                logger.debug("Clip rejected: too short", clip_index=i+1, duration=duration, min_duration=min_duration)
+                print(f"   Rejected: duration too short ({duration}s < {min_duration}s)")
                 continue
 
             # Validate maximum duration
             if duration > max_duration:
-                print(f"   ⚠️  Rejeitado: duração muito longa ({duration}s > {max_duration}s)")
+                logger.debug("Clip rejected: too long", clip_index=i+1, duration=duration, max_duration=max_duration)
+                print(f"   Rejected: duration too long ({duration}s > {max_duration}s)")
                 continue
 
             # Safe conversion of viral score
@@ -458,13 +534,88 @@ Retorne EXATAMENTE {num_clips} cortes."""
                 'title': clip_data.get('titulo', 'Sem título'),
                 'viral_score': viral_score,
                 'justification': clip_data.get('justificativa', ''),
-                'hook': clip_data.get('gancho', '')
+                'hook': clip_data.get('gancho', ''),
+                'category': clip_data.get('categoria', 'insight')
             })
 
         # Sort by viral score (highest first)
         clips.sort(key=lambda x: x['viral_score'], reverse=True)
 
-        print(f"✅ Gerados {len(clips)} cortes sugeridos")
+        # FALLBACK: Nunca retornar 0 clips
+        if len(clips) == 0 and raw_clips_count > 0:
+            logger.warning("All clips rejected, applying fallback with relaxed duration")
+            print("⚠️ Todos os clips foram rejeitados. Aplicando fallback com duração relaxada...")
+
+            # Tentar novamente com duração mínima de 10 segundos (fallback relaxado)
+            fallback_min_duration = 10
+            for i, clip_data in enumerate(result.get('clips', [])):
+                start_seconds = self._parse_timestamp(clip_data.get('timestamp_inicio', '00:00'))
+                end_seconds = self._parse_timestamp(clip_data.get('timestamp_fim', '00:00'))
+                duration = end_seconds - start_seconds
+
+                # Aceitar clips com pelo menos 10 segundos no fallback
+                if duration >= fallback_min_duration and duration <= max_duration:
+                    try:
+                        viral_score = float(clip_data.get('nota_viral', 5))
+                        viral_score = max(0, min(10, viral_score))
+                    except (ValueError, TypeError):
+                        viral_score = 5.0
+
+                    clips.append({
+                        'start_time': start_seconds,
+                        'end_time': end_seconds,
+                        'duration': duration,
+                        'title': clip_data.get('titulo', 'Sem título'),
+                        'viral_score': viral_score,
+                        'justification': clip_data.get('justificativa', ''),
+                        'hook': clip_data.get('gancho', ''),
+                        'category': clip_data.get('categoria', 'insight')
+                    })
+                    print(f"   ✅ Clip {i+1} aceito via fallback (min {fallback_min_duration}s): {duration}s")
+
+            clips.sort(key=lambda x: x['viral_score'], reverse=True)
+
+        # FALLBACK FINAL: Se ainda não há clips, criar do melhor segmento disponível
+        if len(clips) == 0:
+            logger.warning("No clips found, creating fallback from best segment")
+            print("⚠️ Nenhum clip encontrado. Criando clip do melhor segmento disponível...")
+
+            segments = transcription.get('segments', [])
+            if segments:
+                # Encontrar sequência de segmentos com boa duração (15-30 segundos ideal)
+                best_start = segments[0].get('start', 0)
+                video_end = segments[-1].get('end', 30)
+                best_end = min(best_start + 25, video_end)  # 25 segundos ideal
+
+                # Garantir duração mínima de 15 segundos
+                if best_end - best_start < 15:
+                    best_end = best_start + min(20, video_end - best_start)
+
+                # Construir texto do clip
+                clip_text = ""
+                for seg in segments:
+                    if seg.get('start', 0) >= best_start and seg.get('end', 0) <= best_end:
+                        clip_text += seg.get('text', '') + " "
+
+                clips.append({
+                    'start_time': best_start,
+                    'end_time': best_end,
+                    'duration': best_end - best_start,
+                    'title': 'Destaque do Vídeo',
+                    'viral_score': 5.0,
+                    'justification': 'Clip gerado automaticamente do início do vídeo',
+                    'hook': clip_text[:100].strip() if clip_text else 'Confira este momento',
+                    'category': 'insight'
+                })
+                print(f"   ✅ Clip fallback criado: {best_start:.0f}s - {best_end:.0f}s ({best_end - best_start:.0f}s)")
+
+        logger.info(
+            "Clip analysis completed",
+            clips_generated=len(clips),
+            clips_rejected=raw_clips_count - len(clips),
+            provider=self.provider
+        )
+        print(f"Generated {len(clips)} clip suggestions")
         return clips
 
 

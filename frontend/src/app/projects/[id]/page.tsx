@@ -23,6 +23,7 @@ import {
   deleteClip,
   ProjectDetail,
   ProcessingStatus,
+  Clip,
   formatDuration,
   getStatusColor,
   getStatusLabel,
@@ -102,6 +103,17 @@ export default function ProjectPage() {
       loadProject();
     } catch (err) {
       console.error('Failed to delete clip:', err);
+    }
+  };
+
+  const handleUpdateClip = (updatedClip: Clip) => {
+    if (project) {
+      setProject({
+        ...project,
+        clips: project.clips.map((clip) =>
+          clip.id === updatedClip.id ? updatedClip : clip
+        ),
+      });
     }
   };
 
@@ -256,9 +268,21 @@ export default function ProjectPage() {
                     key={clip.id}
                     clip={clip}
                     onDelete={handleDeleteClip}
+                    onUpdate={handleUpdateClip}
                   />
                 ))}
             </div>
+          </div>
+        ) : project.status === 'completed' && project.clips.length === 0 ? (
+          <div className="text-center py-12">
+            <div className="w-16 h-16 bg-dark-700 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Film className="w-8 h-8 text-gray-500" />
+            </div>
+            <p className="text-gray-300 text-lg mb-2">Nenhum corte foi gerado</p>
+            <p className="text-gray-500 text-sm max-w-md mx-auto">
+              O vídeo foi analisado mas nenhum momento viral foi encontrado com os critérios atuais.
+              Tente ajustar a duração mínima dos clips nas configurações ou processar outro vídeo.
+            </p>
           </div>
         ) : project.status === 'error' ? (
           <div className="text-center py-12">

@@ -78,6 +78,15 @@ if AI_PROVIDER not in VALID_AI_PROVIDERS:
 # Whisper settings - OPTIMIZED for better quality
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")  # tiny, base, small, medium, large
 WHISPER_LANGUAGE = os.getenv("WHISPER_LANGUAGE", "pt")  # Portuguese by default
+
+# Supported languages for transcription
+SUPPORTED_LANGUAGES = {
+    "pt": "Portuguese",
+    "en": "English",
+    "es": "Spanish",
+    "auto": "Auto-detect"
+}
+DEFAULT_LANGUAGE = os.getenv("DEFAULT_LANGUAGE", "pt")
 WHISPER_TEMPERATURE = _safe_float(os.getenv("WHISPER_TEMPERATURE", "0.0"), 0.0, "WHISPER_TEMPERATURE", 0.0, 1.0)
 WHISPER_BEAM_SIZE = _safe_int(os.getenv("WHISPER_BEAM_SIZE", "1"), 1, "WHISPER_BEAM_SIZE")
 WHISPER_BEST_OF = _safe_int(os.getenv("WHISPER_BEST_OF", "1"), 1, "WHISPER_BEST_OF")
@@ -94,7 +103,7 @@ DOWNLOAD_RETRY_DELAY = _safe_int(os.getenv("DOWNLOAD_RETRY_DELAY", "5"), 5, "DOW
 
 # Video settings
 MAX_VIDEO_DURATION = 3600 * 3  # 3 hours max
-CLIP_MIN_DURATION = 15  # 15 seconds min (ajustado para vídeos curtos)
+CLIP_MIN_DURATION = 15  # 15 seconds min (duração ideal para TikTok viral)
 CLIP_MAX_DURATION = 60  # 60 seconds max
 NUM_CLIPS_TO_GENERATE = 15  # Igual ao Real Oficial
 

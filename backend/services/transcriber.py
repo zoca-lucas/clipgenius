@@ -148,10 +148,15 @@ class WhisperTranscriber:
         }
         return mime_types.get(ext, 'audio/wav')
 
-    def _groq_request_with_retry(self, audio_path: str, language: str, chunk_name: str = None) -> Dict[str, Any]:
+    def _groq_request_with_retry(self, audio_path: str, language: str = None, chunk_name: str = None) -> Dict[str, Any]:
         """
         Make Groq API request with exponential backoff retry
         Timeout: 120s, Retries: 3 (1s, 2s, 4s delays)
+
+        Args:
+            audio_path: Path to audio file
+            language: Language code (None for auto-detect)
+            chunk_name: Optional name for chunk
         """
         max_retries = 3
         base_delay = 1.0
@@ -168,10 +173,12 @@ class WhisperTranscriber:
                     }
                     data = {
                         'model': self.GROQ_MODEL,
-                        'language': language,
                         'response_format': 'verbose_json',
                         'timestamp_granularities[]': 'word',
                     }
+                    # Only add language if specified (None = auto-detect)
+                    if language is not None:
+                        data['language'] = language
                     headers = {
                         'Authorization': f'Bearer {GROQ_API_KEY}',
                     }
@@ -215,18 +222,19 @@ class WhisperTranscriber:
 
         raise Exception("Groq API failed after all retries")
 
-    def _transcribe_with_groq(self, audio_path: str, language: str = "pt") -> Dict[str, Any]:
+    def _transcribe_with_groq(self, audio_path: str, language: str = None) -> Dict[str, Any]:
         """
         Transcribe using Groq Whisper API (50x faster than local)
 
         Args:
             audio_path: Path to audio file
-            language: Language code
+            language: Language code (None for auto-detect)
 
         Returns:
             Dict with transcription and word-level timestamps
         """
-        print(f"Transcribing with Groq Whisper API: {audio_path}")
+        lang_info = f" (language: {language})" if language else " (auto-detect)"
+        print(f"Transcribing with Groq Whisper API{lang_info}: {audio_path}")
 
         # Check file size (Groq limit is 25MB)
         file_size = Path(audio_path).stat().st_size
@@ -239,10 +247,14 @@ class WhisperTranscriber:
         result = self._groq_request_with_retry(audio_path, language)
         return self._parse_groq_response(result)
 
-    def _transcribe_groq_chunked(self, audio_path: str, language: str = "pt") -> Dict[str, Any]:
+    def _transcribe_groq_chunked(self, audio_path: str, language: str = None) -> Dict[str, Any]:
         """
         Transcribe large audio files by splitting into chunks
         OPTIMIZED: Processes up to 3 chunks in parallel for 3x speedup
+
+        Args:
+            audio_path: Path to audio file
+            language: Language code (None for auto-detect)
         """
         import tempfile
         import os
@@ -435,27 +447,28 @@ class WhisperTranscriber:
             'words': result.get('words', [])
         }
 
-    def _transcribe_local(self, audio_path: str, language: str = "pt") -> Dict[str, Any]:
+    def _transcribe_local(self, audio_path: str, language: str = None) -> Dict[str, Any]:
         """
         Transcribe audio file using local Whisper
 
         Args:
             audio_path: Path to audio file
-            language: Language code (default: Portuguese)
+            language: Language code (None for auto-detect)
 
         Returns:
             Dict with transcription and word-level timestamps
         """
         model = self._load_local_model()
 
-        print(f"Transcribing with local Whisper: {audio_path}")
+        lang_info = f" (language: {language})" if language else " (auto-detect)"
+        print(f"Transcribing with local Whisper{lang_info}: {audio_path}")
 
         # Import config for quality settings
         from config import WHISPER_TEMPERATURE, WHISPER_BEAM_SIZE, WHISPER_BEST_OF
 
         result = model.transcribe(
             audio_path,
-            language=language,
+            language=language,  # None = auto-detect
             word_timestamps=True,
             verbose=False,
             temperature=WHISPER_TEMPERATURE,
@@ -506,12 +519,16 @@ class WhisperTranscriber:
 
         Args:
             audio_path: Path to audio file
-            language: Language code (default from config)
+            language: Language code (None or "auto" for auto-detect, default from config)
 
         Returns:
             Dict with transcription and word-level timestamps
         """
-        language = language or WHISPER_LANGUAGE
+        # Handle language parameter: "auto" means auto-detect (None for Whisper)
+        if language == "auto":
+            language = None
+        elif language is None:
+            language = WHISPER_LANGUAGE
 
         if self.use_groq:
             try:

@@ -2,7 +2,7 @@
 ClipGenius - Clip Model
 """
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, Text, Float, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, Text, Float, ForeignKey, Boolean, JSON
 from sqlalchemy.orm import relationship
 from .database import Base
 
@@ -22,11 +22,17 @@ class Clip(Base):
     title = Column(String(200))
     viral_score = Column(Float)  # 0-10
     score_justification = Column(Text)
+    categoria = Column(String(50))  # humor, insight, polêmica, emoção, dica
 
     # Files
     video_path = Column(String(500))
     video_path_with_subtitles = Column(String(500))
-    subtitle_path = Column(String(500))  # .srt file
+    subtitle_path = Column(String(500))  # .srt or .ass file
+
+    # Subtitle layer system (for editor)
+    subtitle_data = Column(JSON)  # Structured subtitle data: [{start, end, text, words}]
+    subtitle_file = Column(String(500))  # Path to .ass subtitle file
+    has_burned_subtitles = Column(Boolean, default=False)  # Whether subtitles are burned into video
 
     # Transcription segment
     transcription_segment = Column(Text)  # JSON string

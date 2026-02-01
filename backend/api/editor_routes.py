@@ -1,17 +1,31 @@
 """
 ClipGenius - Video Editor API Routes
 """
+import json
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 from pathlib import Path
 
 from models import get_db, Clip
 from services.editor import video_editor, TextOverlay, SubtitleStyle
-
+from services.subtitler import SubtitleGenerator
+from config import CLIPS_DIR, OUTPUT_FORMATS
+from .schemas import (
+    ClipEditorData,
+    SubtitleEntryData,
+    SubtitleStyleConfig,
+    UpdateSubtitlesEditorRequest,
+    ClipExportWithSubtitlesRequest,
+    ClipExportResponse,
+)
 
 router = APIRouter(prefix="/editor", tags=["editor"])
+
+# Initialize subtitle generator
+subtitler = SubtitleGenerator()
 
 
 # ============ Request/Response Schemas ============
@@ -429,3 +443,272 @@ async def get_preview_frame(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Preview generation failed: {str(e)}")
+
+
+# ============ Layer-Based Editor Endpoints ============
+
+@router.get("/clips/{clip_id}/editor-data", response_model=ClipEditorData)
+async def get_clip_editor_data(
+    clip_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Get clip data for the layer-based editor.
+    Returns video URL and subtitle data for overlay rendering.
+    """
+    clip = db.query(Clip).filter(Clip.id == clip_id).first()
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    # Get video path (prefer without burned subtitles for editing)
+    video_path = clip.video_path
+    if not video_path or not Path(video_path).exists():
+        raise HTTPException(status_code=404, detail="Video file not found")
+
+    # Build video URL
+    filename = Path(video_path).name
+    video_url = f"/clips/{filename}"
+
+    # Parse subtitle_data if it's a string
+    subtitle_data = clip.subtitle_data
+    if isinstance(subtitle_data, str):
+        try:
+            subtitle_data = json.loads(subtitle_data)
+        except json.JSONDecodeError:
+            subtitle_data = []
+
+    # Default style configuration
+    default_style = SubtitleStyleConfig(
+        font_name="Arial",
+        font_size=42,
+        primary_color="&H00FFFFFF",
+        highlight_color="&H0000FFFF",
+        outline_color="&H00000000",
+        outline_size=3,
+        shadow_size=2,
+        margin_v=80,
+        karaoke_enabled=True,
+        scale_effect=True
+    )
+
+    return ClipEditorData(
+        clip_id=clip.id,
+        video_url=video_url,
+        video_path=video_path,
+        duration=clip.duration or 0,
+        title=clip.title,
+        subtitle_data=[SubtitleEntryData(**s) for s in (subtitle_data or [])],
+        subtitle_file=clip.subtitle_file,
+        has_burned_subtitles=clip.has_burned_subtitles or False,
+        default_style=default_style
+    )
+
+
+@router.get("/clips/{clip_id}/subtitle-file")
+async def get_clip_subtitle_file(
+    clip_id: int,
+    db: Session = Depends(get_db)
+):
+    """
+    Download the .ass subtitle file for a clip.
+    """
+    clip = db.query(Clip).filter(Clip.id == clip_id).first()
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    subtitle_file = clip.subtitle_file or clip.subtitle_path
+    if not subtitle_file or not Path(subtitle_file).exists():
+        raise HTTPException(status_code=404, detail="Subtitle file not found")
+
+    return FileResponse(
+        subtitle_file,
+        media_type="text/plain",
+        filename=f"clip_{clip_id}_subtitles{Path(subtitle_file).suffix}"
+    )
+
+
+@router.put("/clips/{clip_id}/editor-subtitles")
+async def update_clip_subtitles_editor(
+    clip_id: int,
+    request: UpdateSubtitlesEditorRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Update subtitle data from the editor.
+    Saves the subtitle data and regenerates the .ass file without burning.
+    """
+    clip = db.query(Clip).filter(Clip.id == clip_id).first()
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    try:
+        # Convert subtitles to dict format for storage
+        subtitle_data = [s.model_dump() for s in request.subtitles]
+
+        # Update clip subtitle data
+        clip.subtitle_data = subtitle_data
+
+        # Regenerate .ass file with new data
+        if subtitle_data:
+            # Extract all words from subtitle entries
+            all_words = []
+            for entry in subtitle_data:
+                words = entry.get('words', [])
+                if words:
+                    all_words.extend(words)
+                else:
+                    # Create word entries from text
+                    text = entry.get('text', '')
+                    start = entry.get('start', 0)
+                    end = entry.get('end', 0)
+                    word_list = text.split()
+                    if word_list:
+                        duration_per_word = (end - start) / len(word_list)
+                        for j, word in enumerate(word_list):
+                            all_words.append({
+                                'word': word,
+                                'start': start + j * duration_per_word,
+                                'end': start + (j + 1) * duration_per_word
+                            })
+
+            # Generate new ASS file
+            output_name = f"clip_{clip_id}"
+            ass_path = CLIPS_DIR / f"{output_name}.ass"
+
+            # Build style dict if provided
+            style = None
+            if request.style:
+                style = {
+                    'font_name': request.style.font_name,
+                    'font_size': request.style.font_size,
+                    'primary_color': request.style.primary_color,
+                    'outline_color': request.style.outline_color,
+                    'outline': request.style.outline_size,
+                    'shadow': request.style.shadow_size,
+                    'margin_v': request.style.margin_v,
+                }
+
+            karaoke_enabled = request.style.karaoke_enabled if request.style else True
+
+            if karaoke_enabled:
+                subtitler.generate_ass_karaoke(
+                    words=all_words,
+                    output_path=str(ass_path),
+                    offset=0,
+                    style=style
+                )
+            else:
+                subtitler.generate_ass(
+                    words=all_words,
+                    output_path=str(ass_path),
+                    offset=0,
+                    style=style
+                )
+
+            clip.subtitle_file = str(ass_path)
+            clip.subtitle_path = str(ass_path)
+
+        db.commit()
+
+        return {
+            "success": True,
+            "message": f"Updated {len(subtitle_data)} subtitle(s)",
+            "subtitle_file": clip.subtitle_file
+        }
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update subtitles: {str(e)}")
+
+
+@router.post("/clips/{clip_id}/export-with-subtitles", response_model=ClipExportResponse)
+async def export_clip_with_subtitles(
+    clip_id: int,
+    request: ClipExportWithSubtitlesRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Export a clip with optional subtitle burning.
+    User can choose to include or exclude subtitles in the final video.
+    """
+    clip = db.query(Clip).filter(Clip.id == clip_id).first()
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    video_path = clip.video_path
+    if not video_path or not Path(video_path).exists():
+        raise HTTPException(status_code=404, detail="Video file not found")
+
+    # Validate format
+    if request.format_id not in OUTPUT_FORMATS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid format. Available: {', '.join(OUTPUT_FORMATS.keys())}"
+        )
+
+    try:
+        output_name = f"clip_{clip_id}_export_{request.format_id}"
+        output_path = CLIPS_DIR / f"{output_name}.mp4"
+
+        if request.include_subtitles:
+            # Get subtitle data
+            subtitle_data = clip.subtitle_data
+            if isinstance(subtitle_data, str):
+                subtitle_data = json.loads(subtitle_data)
+
+            if not subtitle_data:
+                raise HTTPException(status_code=400, detail="No subtitle data available")
+
+            # Build style dict if provided
+            style = None
+            if request.subtitle_style:
+                style = {
+                    'font_name': request.subtitle_style.font_name,
+                    'font_size': request.subtitle_style.font_size,
+                    'primary_color': request.subtitle_style.primary_color,
+                    'outline_color': request.subtitle_style.outline_color,
+                    'outline': request.subtitle_style.outline_size,
+                    'shadow': request.subtitle_style.shadow_size,
+                    'margin_v': request.subtitle_style.margin_v,
+                }
+                karaoke_enabled = request.subtitle_style.karaoke_enabled
+            else:
+                karaoke_enabled = True
+
+            # Burn subtitles on demand
+            result = subtitler.burn_subtitles_on_demand(
+                video_path=video_path,
+                subtitle_data=subtitle_data,
+                output_path=str(output_path),
+                style=style,
+                enable_karaoke=karaoke_enabled
+            )
+
+            export_path = result['path']
+            has_subtitles = True
+            message = "Clip exportado com legendas"
+        else:
+            # Copy video without subtitles
+            import shutil
+            shutil.copy2(video_path, output_path)
+            export_path = str(output_path)
+            has_subtitles = False
+            message = "Clip exportado sem legendas"
+
+        # Build download URL
+        filename = Path(export_path).name
+        download_url = f"/clips/{filename}"
+
+        return ClipExportResponse(
+            success=True,
+            video_path=export_path,
+            download_url=download_url,
+            message=message,
+            has_subtitles=has_subtitles,
+            format_id=request.format_id
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")

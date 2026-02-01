@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, HttpUrl
 class ProjectCreate(BaseModel):
     """Schema for creating a new project"""
     url: str = Field(..., description="YouTube video URL")
+    language: Optional[str] = Field(None, description="Language code for transcription (pt, en, es, auto). Default: pt")
 
 
 class ClipRegenerate(BaseModel):
@@ -34,6 +35,9 @@ class ClipResponse(BaseModel):
     video_path: Optional[str]
     video_path_with_subtitles: Optional[str]
     subtitle_path: Optional[str]
+    subtitle_data: Optional[List[dict]] = None
+    subtitle_file: Optional[str] = None
+    has_burned_subtitles: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -112,3 +116,71 @@ class OutputFormatsResponse(BaseModel):
 class ClipExportRequest(BaseModel):
     """Schema for exporting a clip in different format"""
     format_id: str = Field(..., description="Output format ID (vertical, square, landscape, portrait)")
+
+
+# ============ Editor Schemas ============
+
+class SubtitleWord(BaseModel):
+    """Schema for word-level subtitle timing"""
+    word: str
+    start: float
+    end: float
+
+
+class SubtitleEntryData(BaseModel):
+    """Schema for a single subtitle entry"""
+    id: str
+    start: float
+    end: float
+    text: str
+    words: Optional[List[SubtitleWord]] = None
+
+
+class SubtitleStyleConfig(BaseModel):
+    """Schema for subtitle style configuration"""
+    font_name: str = Field("Arial", description="Font family name")
+    font_size: int = Field(42, ge=12, le=100, description="Font size in points")
+    primary_color: str = Field("&H00FFFFFF", description="Main text color (ASS format)")
+    highlight_color: str = Field("&H0000FFFF", description="Highlighted word color for karaoke")
+    outline_color: str = Field("&H00000000", description="Text outline color")
+    outline_size: int = Field(3, ge=0, le=10, description="Outline thickness")
+    shadow_size: int = Field(2, ge=0, le=10, description="Shadow size")
+    margin_v: int = Field(80, ge=0, le=500, description="Vertical margin from bottom")
+    karaoke_enabled: bool = Field(True, description="Enable karaoke word highlighting")
+    scale_effect: bool = Field(True, description="Enable scale pop effect on words")
+
+
+class ClipEditorData(BaseModel):
+    """Schema for clip editor data response"""
+    clip_id: int
+    video_url: str
+    video_path: str
+    duration: float
+    title: Optional[str]
+    subtitle_data: List[SubtitleEntryData]
+    subtitle_file: Optional[str]
+    has_burned_subtitles: bool
+    default_style: SubtitleStyleConfig
+
+
+class UpdateSubtitlesEditorRequest(BaseModel):
+    """Schema for updating subtitles from editor"""
+    subtitles: List[SubtitleEntryData]
+    style: Optional[SubtitleStyleConfig] = None
+
+
+class ClipExportWithSubtitlesRequest(BaseModel):
+    """Schema for exporting clip with subtitle options"""
+    include_subtitles: bool = Field(True, description="Whether to burn subtitles into video")
+    subtitle_style: Optional[SubtitleStyleConfig] = None
+    format_id: str = Field("vertical", description="Output format (vertical, square, landscape)")
+
+
+class ClipExportResponse(BaseModel):
+    """Schema for clip export response"""
+    success: bool
+    video_path: str
+    download_url: str
+    message: str
+    has_subtitles: bool
+    format_id: str

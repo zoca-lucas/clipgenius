@@ -11,3 +11,8 @@ pydantic
 python-dotenv
 aiosqlite
 httpx
+
+# AI Reframe - Face tracking
+mediapipe
+opencv-python
+numpy

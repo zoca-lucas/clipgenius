@@ -21,9 +21,17 @@ for dir_path in [VIDEOS_DIR, CLIPS_DIR, AUDIO_DIR]:
 # Database
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATA_DIR}/database.db")
 
-# Ollama settings (FREE local AI)
+# AI Provider settings
+# Groq (FREE cloud API - much faster and better quality)
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")  # Best quality model
+
+# Ollama settings (FREE local AI - fallback if no Groq API key)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1")
+
+# AI Provider selection: "groq" (default if API key exists) or "ollama"
+AI_PROVIDER = os.getenv("AI_PROVIDER", "auto")  # auto, groq, or ollama
 
 # Whisper settings - OPTIMIZED for better quality
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")  # tiny, base, small, medium, large
@@ -57,3 +65,8 @@ ALLOWED_MIME_TYPES = [
     "video/x-matroska",
     "video/webm"
 ]
+
+# AI Reframe settings - Face tracking for vertical video
+ENABLE_AI_REFRAME = os.getenv("ENABLE_AI_REFRAME", "true").lower() == "true"
+REFRAME_SAMPLE_INTERVAL = float(os.getenv("REFRAME_SAMPLE_INTERVAL", "0.5"))  # Face detection every 0.5s
+REFRAME_DYNAMIC_MODE = os.getenv("REFRAME_DYNAMIC_MODE", "false").lower() == "true"  # Frame-by-frame (slower)

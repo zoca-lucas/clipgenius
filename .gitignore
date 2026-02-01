@@ -54,3 +54,7 @@ htmlcov/
 *.tmp
 *.temp
 .cache/
+
+# Model cache (downloaded at runtime)
+models_cache/
+*.tflite

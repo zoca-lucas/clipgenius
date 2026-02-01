@@ -10,7 +10,15 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from pathlib import Path
 
-from config import VIDEOS_DIR, MAX_UPLOAD_SIZE, ALLOWED_VIDEO_EXTENSIONS, ALLOWED_MIME_TYPES
+from config import (
+    VIDEOS_DIR,
+    MAX_UPLOAD_SIZE,
+    ALLOWED_VIDEO_EXTENSIONS,
+    ALLOWED_MIME_TYPES,
+    ENABLE_AI_REFRAME,
+    REFRAME_SAMPLE_INTERVAL,
+    REFRAME_DYNAMIC_MODE
+)
 
 from models import get_db, Project, Clip, SessionLocal
 from models.project import ProjectStatus
@@ -19,7 +27,8 @@ from services import (
     WhisperTranscriber,
     ClipAnalyzer,
     VideoCutter,
-    SubtitleGenerator
+    SubtitleGenerator,
+    AIReframer
 )
 from .schemas import (
     ProjectCreate,
@@ -39,11 +48,57 @@ downloader = YouTubeDownloader()
 transcriber = WhisperTranscriber()
 cutter = VideoCutter()
 subtitler = SubtitleGenerator()
+reframer = AIReframer()
 
 
 def get_analyzer():
     """Lazy load analyzer (requires API key)"""
     return ClipAnalyzer()
+
+
+def cut_clip_with_optional_reframe(
+    video_path: str,
+    start_time: float,
+    end_time: float,
+    output_name: str,
+    enable_reframe: bool = ENABLE_AI_REFRAME
+) -> dict:
+    """
+    Cut a clip with optional AI reframing (face tracking).
+    Falls back to center crop if reframe is disabled or fails.
+    """
+    if enable_reframe:
+        try:
+            if REFRAME_DYNAMIC_MODE:
+                # Frame-by-frame tracking (slower but smoother)
+                return reframer.cut_clip_with_dynamic_tracking(
+                    video_path=video_path,
+                    start_time=start_time,
+                    end_time=end_time,
+                    output_name=output_name,
+                    sample_interval=REFRAME_SAMPLE_INTERVAL
+                )
+            else:
+                # Static tracking (faster, uses average face position)
+                return reframer.cut_clip_with_tracking(
+                    video_path=video_path,
+                    start_time=start_time,
+                    end_time=end_time,
+                    output_name=output_name,
+                    enable_tracking=True,
+                    sample_interval=REFRAME_SAMPLE_INTERVAL
+                )
+        except Exception as e:
+            print(f"⚠️  AI Reframe failed, falling back to center crop: {e}")
+
+    # Fallback to simple center crop
+    return cutter.cut_clip(
+        video_path=video_path,
+        start_time=start_time,
+        end_time=end_time,
+        output_name=output_name,
+        convert_to_vertical=True
+    )
 
 
 # ============ Background Processing ============
@@ -102,15 +157,15 @@ def process_video(project_id: int):
             db.commit()
 
             for i, suggestion in enumerate(clip_suggestions):
-                # Cut the clip
+                # Cut the clip with AI reframe (face tracking)
                 clip_name = f"{project.youtube_id}_clip_{i+1:02d}"
 
-                clip_result = cutter.cut_clip(
+                clip_result = cut_clip_with_optional_reframe(
                     video_path=project.video_path,
                     start_time=suggestion['start_time'],
                     end_time=suggestion['end_time'],
                     output_name=clip_name,
-                    convert_to_vertical=True
+                    enable_reframe=ENABLE_AI_REFRAME
                 )
 
                 # Get transcription segment for this clip
@@ -414,12 +469,13 @@ async def get_project_status(project_id: int, db: Session = Depends(get_db)):
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    reframe_status = " com AI Reframe" if ENABLE_AI_REFRAME else ""
     status_messages = {
         ProjectStatus.PENDING.value: "Aguardando processamento...",
         ProjectStatus.DOWNLOADING.value: "Baixando vídeo do YouTube...",
         ProjectStatus.TRANSCRIBING.value: "Transcrevendo áudio com Whisper...",
         ProjectStatus.ANALYZING.value: "Analisando conteúdo com IA...",
-        ProjectStatus.CUTTING.value: "Gerando cortes e legendas...",
+        ProjectStatus.CUTTING.value: f"Gerando cortes{reframe_status} e legendas...",
         ProjectStatus.COMPLETED.value: "Processamento concluído!",
         ProjectStatus.ERROR.value: f"Erro: {project.error_message}",
     }

@@ -1,7 +1,7 @@
 """
 ClipGenius - AI Clip Analyzer Service
-Uses Ollama (local LLM) to analyze transcription and suggest viral clips
-FREE - No API costs! Runs 100% locally.
+Uses Groq (FREE cloud API) or Ollama (local) to analyze transcription and suggest viral clips
+Groq is 10x faster with better quality models (70B parameters)
 """
 import json
 import re
@@ -12,12 +12,15 @@ from config import (
     CLIP_MIN_DURATION,
     CLIP_MAX_DURATION,
     OLLAMA_BASE_URL,
-    OLLAMA_MODEL
+    OLLAMA_MODEL,
+    GROQ_API_KEY,
+    GROQ_MODEL,
+    AI_PROVIDER
 )
 
 
 class ClipAnalyzer:
-    """Service to analyze transcription and suggest viral clips using Ollama (FREE)"""
+    """Service to analyze transcription and suggest viral clips using Groq or Ollama"""
 
     ANALYSIS_PROMPT = """Você é um especialista em conteúdo viral para redes sociais (TikTok, Reels, Shorts).
 
@@ -47,10 +50,64 @@ IMPORTANTE: Responda APENAS com JSON válido, sem texto adicional antes ou depoi
 
 Retorne EXATAMENTE {num_clips} cortes."""
 
-    def __init__(self, model: str = None, base_url: str = None):
-        self.model = model or OLLAMA_MODEL
-        self.base_url = base_url or OLLAMA_BASE_URL
-        self._verify_ollama()
+    def __init__(self, provider: str = None):
+        """
+        Initialize analyzer with specified provider
+
+        Args:
+            provider: "groq", "ollama", or "auto" (default)
+                      auto = use Groq if API key exists, otherwise Ollama
+        """
+        self.provider = self._determine_provider(provider)
+
+        if self.provider == "groq":
+            self.model = GROQ_MODEL
+            self._verify_groq()
+        else:
+            self.model = OLLAMA_MODEL
+            self.base_url = OLLAMA_BASE_URL
+            self._verify_ollama()
+
+        print(f"🤖 AI Provider: {self.provider.upper()} ({self.model})")
+
+    def _determine_provider(self, provider: str = None) -> str:
+        """Determine which AI provider to use"""
+        provider = provider or AI_PROVIDER
+
+        if provider == "auto":
+            # Use Groq if API key is available, otherwise Ollama
+            if GROQ_API_KEY:
+                return "groq"
+            else:
+                print("⚠️  GROQ_API_KEY não configurada, usando Ollama local")
+                return "ollama"
+
+        return provider
+
+    def _verify_groq(self):
+        """Verify Groq API key is configured"""
+        if not GROQ_API_KEY:
+            raise ValueError(
+                "\n❌ GROQ_API_KEY não configurada!\n"
+                "   \n"
+                "   Para configurar:\n"
+                "   1. Acesse: https://console.groq.com/keys\n"
+                "   2. Crie uma API key gratuita\n"
+                "   3. Adicione no .env: GROQ_API_KEY=sua_chave_aqui\n"
+            )
+
+        # Test connection
+        try:
+            response = httpx.get(
+                "https://api.groq.com/openai/v1/models",
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+                timeout=10
+            )
+            if response.status_code != 200:
+                raise ConnectionError(f"Groq API error: {response.status_code}")
+            print("✅ Groq API conectada com sucesso!")
+        except httpx.ConnectError:
+            raise ConnectionError("❌ Não foi possível conectar à API do Groq")
 
     def _verify_ollama(self):
         """Verify Ollama is running and model is available"""
@@ -107,6 +164,40 @@ Retorne EXATAMENTE {num_clips} cortes."""
         except (ValueError, IndexError):
             return 0
 
+    def _call_groq(self, prompt: str) -> str:
+        """Call Groq API (OpenAI-compatible)"""
+        print(f"⚡ Chamando Groq ({self.model})... (muito mais rápido!)")
+
+        response = httpx.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": self.model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "Você é um assistente especializado em análise de conteúdo viral. Sempre responda em JSON válido."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                "temperature": 0.7,
+                "max_tokens": 4096,
+            },
+            timeout=httpx.Timeout(120.0, connect=30.0)
+        )
+
+        if response.status_code != 200:
+            error_detail = response.json().get("error", {}).get("message", response.text)
+            raise Exception(f"Groq API error: {error_detail}")
+
+        return response.json()["choices"][0]["message"]["content"]
+
     def _call_ollama(self, prompt: str) -> str:
         """Call Ollama API"""
         print(f"🤖 Chamando Ollama ({self.model})...")
@@ -129,6 +220,13 @@ Retorne EXATAMENTE {num_clips} cortes."""
             raise Exception(f"Ollama error: {response.text}")
 
         return response.json().get("response", "")
+
+    def _call_ai(self, prompt: str) -> str:
+        """Call the configured AI provider"""
+        if self.provider == "groq":
+            return self._call_groq(prompt)
+        else:
+            return self._call_ollama(prompt)
 
     def _try_fix_json(self, text: str) -> Dict:
         """Try to fix common JSON parsing issues from LLM output"""
@@ -193,10 +291,11 @@ Retorne EXATAMENTE {num_clips} cortes."""
             transcription=formatted_transcription
         )
 
-        print(f"📊 Analisando transcrição com Ollama... (solicitando {num_clips} cortes)")
+        provider_name = "Groq" if self.provider == "groq" else "Ollama"
+        print(f"📊 Analisando transcrição com {provider_name}... (solicitando {num_clips} cortes)")
 
-        # Call Ollama
-        response_text = self._call_ollama(prompt)
+        # Call AI
+        response_text = self._call_ai(prompt)
 
         # Parse JSON from response
         try:
@@ -245,11 +344,11 @@ Retorne EXATAMENTE {num_clips} cortes."""
 
 # Quick test
 if __name__ == "__main__":
-    print("🧪 Testando conexão com Ollama...")
+    print("🧪 Testando conexão com AI...")
     try:
         analyzer = ClipAnalyzer()
         print("✅ Analyzer inicializado com sucesso!")
+        print(f"   Provider: {analyzer.provider}")
         print(f"   Modelo: {analyzer.model}")
-        print(f"   URL: {analyzer.base_url}")
-    except ConnectionError as e:
+    except (ConnectionError, ValueError) as e:
         print(e)

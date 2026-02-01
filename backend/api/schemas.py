@@ -65,12 +65,14 @@ class ProjectDetailResponse(ProjectResponse):
 
 
 class ProcessingStatus(BaseModel):
-    """Schema for processing status"""
+    """Schema for processing status with detailed progress"""
     project_id: int
     status: str
-    progress: Optional[int] = None  # 0-100
-    current_step: Optional[str] = None
-    message: Optional[str] = None
+    progress: int = 0  # 0-100%
+    current_step: str = ""
+    step_progress: Optional[str] = None  # e.g., "8/15"
+    eta_seconds: Optional[int] = None  # Estimated time remaining
+    message: str = ""
 
 
 # ============ List Responses ============

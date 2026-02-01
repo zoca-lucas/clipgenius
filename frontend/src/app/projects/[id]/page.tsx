@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import Header from '@/components/Header';
 import ClipCard from '@/components/ClipCard';
+import ProgressBar from '@/components/ProgressBar';
 import {
   getProject,
   getProjectStatus,
@@ -174,10 +175,16 @@ export default function ProjectPage() {
                     </span>
                   </div>
 
-                  {/* Processing status */}
-                  {status && (
-                    <div className="bg-dark-600 rounded-lg p-4 mb-4">
-                      <p className="text-sm text-gray-300">{status.message}</p>
+                  {/* Processing status with progress bar */}
+                  {status && isProcessing && (
+                    <div className="mb-4">
+                      <ProgressBar
+                        progress={status.progress}
+                        status={status.status}
+                        message={status.message}
+                        stepProgress={status.step_progress}
+                        etaSeconds={status.eta_seconds}
+                      />
                     </div>
                   )}
 
@@ -240,12 +247,24 @@ export default function ProjectPage() {
             <p className="text-gray-500 text-sm">{project.error_message}</p>
           </div>
         ) : (
-          <div className="text-center py-12">
-            <Loader2 className="w-12 h-12 animate-spin text-primary mx-auto mb-4" />
-            <p className="text-gray-400">Processando vídeo...</p>
-            <p className="text-gray-500 text-sm mt-2">
-              Isso pode levar alguns minutos dependendo do tamanho do vídeo
-            </p>
+          <div className="py-8">
+            <h2 className="text-xl font-bold text-white mb-6">
+              Processando Vídeo
+            </h2>
+            {status ? (
+              <ProgressBar
+                progress={status.progress}
+                status={status.status}
+                message={status.message}
+                stepProgress={status.step_progress}
+                etaSeconds={status.eta_seconds}
+              />
+            ) : (
+              <div className="text-center py-12">
+                <Loader2 className="w-12 h-12 animate-spin text-primary mx-auto mb-4" />
+                <p className="text-gray-400">Iniciando processamento...</p>
+              </div>
+            )}
           </div>
         )}
       </div>

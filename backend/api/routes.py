@@ -4,6 +4,7 @@ ClipGenius - API Routes
 import json
 import uuid
 import shutil
+from datetime import datetime
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File
 from fastapi.responses import FileResponse
@@ -17,7 +18,8 @@ from config import (
     ALLOWED_MIME_TYPES,
     ENABLE_AI_REFRAME,
     REFRAME_SAMPLE_INTERVAL,
-    REFRAME_DYNAMIC_MODE
+    REFRAME_DYNAMIC_MODE,
+    NUM_CLIPS_TO_GENERATE
 )
 
 from models import get_db, Project, Clip, SessionLocal
@@ -54,6 +56,53 @@ reframer = AIReframer()
 def get_analyzer():
     """Lazy load analyzer (requires API key)"""
     return ClipAnalyzer()
+
+
+# Progress tracking weights for each step (must sum to 100)
+STEP_WEIGHTS = {
+    'downloading': 15,    # 0-15%
+    'transcribing': 25,   # 15-40%
+    'analyzing': 20,      # 40-60%
+    'cutting': 40,        # 60-100%
+}
+
+STEP_BASE_PROGRESS = {
+    'downloading': 0,
+    'transcribing': 15,
+    'analyzing': 40,
+    'cutting': 60,
+}
+
+
+def update_progress(
+    db: Session,
+    project: Project,
+    status: str,
+    progress: int,
+    message: str,
+    step_progress: str = None
+):
+    """
+    Update project progress in database.
+
+    Args:
+        db: Database session
+        project: Project to update
+        status: Current status (downloading, transcribing, etc.)
+        progress: Overall progress 0-100%
+        message: Human-readable message
+        step_progress: Optional step progress like "8/15"
+    """
+    project.status = status
+    project.progress = min(100, max(0, progress))
+    project.progress_message = message
+    project.progress_step = step_progress
+
+    # Set start time on first progress update
+    if project.progress_started_at is None:
+        project.progress_started_at = datetime.utcnow()
+
+    db.commit()
 
 
 def cut_clip_with_optional_reframe(
@@ -105,12 +154,11 @@ def cut_clip_with_optional_reframe(
 
 def process_video(project_id: int):
     """
-    Background task to process video:
-    1. Download video
-    2. Transcribe audio
-    3. Analyze with AI
-    4. Cut clips
-    5. Add subtitles
+    Background task to process video with progress tracking:
+    1. Download video (0-15%)
+    2. Transcribe audio (15-40%)
+    3. Analyze with AI (40-60%)
+    4. Cut clips + subtitles (60-100%)
 
     IMPORTANTE: Cria sua própria sessão SQLAlchemy para não depender do escopo da requisição HTTP.
     """
@@ -121,44 +169,81 @@ def process_video(project_id: int):
             db.close()
             return
 
+        # Initialize progress tracking
+        project.progress_started_at = datetime.utcnow()
+        db.commit()
+
         try:
-            # Step 1: Download (skip if video already exists - upload case)
+            # ========== Step 1: Download (0-15%) ==========
             if project.video_path and Path(project.video_path).exists():
                 print(f"📁 Video already exists, skipping download: {project.video_path}")
+                update_progress(db, project, ProjectStatus.DOWNLOADING.value, 15,
+                               "Vídeo já existe, pulando download...")
             else:
-                project.status = ProjectStatus.DOWNLOADING.value
-                db.commit()
+                update_progress(db, project, ProjectStatus.DOWNLOADING.value, 0,
+                               "Iniciando download do YouTube...")
+
+                # Download with progress simulation (yt-dlp doesn't give easy progress)
+                update_progress(db, project, ProjectStatus.DOWNLOADING.value, 5,
+                               "Conectando ao YouTube...")
 
                 video_info = downloader.download(project.youtube_url, project.youtube_id)
                 project.title = video_info['title']
                 project.duration = video_info['duration']
                 project.thumbnail_url = video_info['thumbnail']
                 project.video_path = video_info['video_path']
-                db.commit()
 
-            # Step 2: Transcribe
-            project.status = ProjectStatus.TRANSCRIBING.value
-            db.commit()
+                update_progress(db, project, ProjectStatus.DOWNLOADING.value, 15,
+                               "Download concluído!")
+
+            # ========== Step 2: Transcribe (15-40%) ==========
+            update_progress(db, project, ProjectStatus.TRANSCRIBING.value, 16,
+                           "Extraindo áudio do vídeo...")
+
+            update_progress(db, project, ProjectStatus.TRANSCRIBING.value, 20,
+                           "Transcrevendo com Whisper AI...")
 
             transcription = transcriber.transcribe_video(project.video_path)
             project.audio_path = transcription.get('audio_path')
             project.transcription = json.dumps(transcription)
-            db.commit()
 
-            # Step 3: Analyze with AI
-            project.status = ProjectStatus.ANALYZING.value
-            db.commit()
+            update_progress(db, project, ProjectStatus.TRANSCRIBING.value, 40,
+                           "Transcrição concluída!")
+
+            # ========== Step 3: Analyze with AI (40-60%) ==========
+            update_progress(db, project, ProjectStatus.ANALYZING.value, 41,
+                           "Enviando para análise de IA...")
+
+            update_progress(db, project, ProjectStatus.ANALYZING.value, 45,
+                           "IA identificando momentos virais...")
 
             analyzer = get_analyzer()
             clip_suggestions = analyzer.analyze(transcription)
 
-            # Step 4 & 5: Cut clips and add subtitles
-            project.status = ProjectStatus.CUTTING.value
-            db.commit()
+            update_progress(db, project, ProjectStatus.ANALYZING.value, 60,
+                           f"IA encontrou {len(clip_suggestions)} momentos virais!")
+
+            # ========== Step 4 & 5: Cut clips + subtitles (60-100%) ==========
+            total_clips = len(clip_suggestions)
+            clip_progress_weight = 40  # 40% do progresso total (60-100)
 
             for i, suggestion in enumerate(clip_suggestions):
+                clip_num = i + 1
+
+                # Calculate progress within cutting phase
+                clip_progress = int(60 + (clip_progress_weight * clip_num / total_clips))
+
+                reframe_text = " com AI Reframe" if ENABLE_AI_REFRAME else ""
+                update_progress(
+                    db, project,
+                    ProjectStatus.CUTTING.value,
+                    clip_progress - 2,  # Slightly before completion
+                    f"Gerando corte {clip_num}/{total_clips}{reframe_text}...",
+                    f"{clip_num}/{total_clips}"
+                )
+
                 # Cut the clip with AI reframe (face tracking)
-                clip_name = f"{project.youtube_id}_clip_{i+1:02d}"
+                clip_name = f"{project.youtube_id}_clip_{clip_num:02d}"
 
                 clip_result = cut_clip_with_optional_reframe(
                     video_path=project.video_path,
@@ -205,12 +290,18 @@ def process_video(project_id: int):
                 db.commit()
 
             # Done!
-            project.status = ProjectStatus.COMPLETED.value
-            db.commit()
+            update_progress(
+                db, project,
+                ProjectStatus.COMPLETED.value,
+                100,
+                f"Concluído! {total_clips} cortes gerados com sucesso.",
+                f"{total_clips}/{total_clips}"
+            )
 
         except Exception as e:
             project.status = ProjectStatus.ERROR.value
             project.error_message = str(e)
+            project.progress_message = f"Erro: {str(e)}"
             db.commit()
             raise
     finally:
@@ -464,13 +555,22 @@ async def delete_project(project_id: int, db: Session = Depends(get_db)):
 
 @router.get("/projects/{project_id}/status", response_model=ProcessingStatus)
 async def get_project_status(project_id: int, db: Session = Depends(get_db)):
-    """Get current processing status of a project"""
+    """Get current processing status of a project with detailed progress"""
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    # Calculate ETA based on progress and elapsed time
+    eta_seconds = None
+    if project.progress_started_at and project.progress and project.progress > 0 and project.progress < 100:
+        elapsed = (datetime.utcnow() - project.progress_started_at).total_seconds()
+        # ETA = (elapsed / progress) * remaining_progress
+        remaining_progress = 100 - project.progress
+        eta_seconds = int((elapsed / project.progress) * remaining_progress)
+
+    # Use custom message if available, otherwise use default
     reframe_status = " com AI Reframe" if ENABLE_AI_REFRAME else ""
-    status_messages = {
+    default_messages = {
         ProjectStatus.PENDING.value: "Aguardando processamento...",
         ProjectStatus.DOWNLOADING.value: "Baixando vídeo do YouTube...",
         ProjectStatus.TRANSCRIBING.value: "Transcrevendo áudio com Whisper...",
@@ -480,11 +580,16 @@ async def get_project_status(project_id: int, db: Session = Depends(get_db)):
         ProjectStatus.ERROR.value: f"Erro: {project.error_message}",
     }
 
+    message = project.progress_message or default_messages.get(project.status, "Processando...")
+
     return ProcessingStatus(
         project_id=project.id,
         status=project.status,
+        progress=project.progress or 0,
         current_step=project.status,
-        message=status_messages.get(project.status, "Processando...")
+        step_progress=project.progress_step,
+        eta_seconds=eta_seconds,
+        message=message
     )
 
 

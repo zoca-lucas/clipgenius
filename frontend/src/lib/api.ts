@@ -41,9 +41,11 @@ export interface ProjectDetail extends Project {
 export interface ProcessingStatus {
   project_id: number;
   status: string;
-  progress: number | null;
-  current_step: string | null;
-  message: string | null;
+  progress: number;
+  current_step: string;
+  step_progress: string | null;
+  eta_seconds: number | null;
+  message: string;
 }
 
 // API Functions

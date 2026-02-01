@@ -35,6 +35,12 @@ class Project(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    # Progress tracking
+    progress = Column(Integer, default=0)  # 0-100%
+    progress_message = Column(String(500))  # Detailed message
+    progress_step = Column(String(100))  # e.g., "8/15"
+    progress_started_at = Column(DateTime)  # For ETA calculation
+
     # Relationship
     clips = relationship("Clip", back_populates="project", cascade="all, delete-orphan")
 

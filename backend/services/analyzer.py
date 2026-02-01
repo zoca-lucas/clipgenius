@@ -1,7 +1,7 @@
 """
 ClipGenius - AI Clip Analyzer Service
-Uses Minimax (cloud API with Anthropic-compatible endpoint) or Ollama (local) to analyze transcription and suggest viral clips
-Minimax M2 offers high quality with 200k+ context window
+Uses Groq (FREE cloud API), Minimax, or Ollama (local) to analyze transcription and suggest viral clips
+Groq is 10x faster with high quality models (70B parameters)
 """
 import json
 import re
@@ -13,6 +13,8 @@ from config import (
     CLIP_MAX_DURATION,
     OLLAMA_BASE_URL,
     OLLAMA_MODEL,
+    GROQ_API_KEY,
+    GROQ_MODEL,
     MINIMAX_API_KEY,
     MINIMAX_MODEL,
     MINIMAX_BASE_URL,
@@ -21,7 +23,7 @@ from config import (
 
 
 class ClipAnalyzer:
-    """Service to analyze transcription and suggest viral clips using Minimax or Ollama"""
+    """Service to analyze transcription and suggest viral clips using Groq, Minimax, or Ollama"""
 
     ANALYSIS_PROMPT = """Você é um especialista em conteúdo viral para redes sociais (TikTok, Reels, Shorts).
 
@@ -62,12 +64,15 @@ Retorne EXATAMENTE {num_clips} cortes."""
         Initialize analyzer with specified provider
 
         Args:
-            provider: "minimax", "ollama", or "auto" (default)
-                      auto = use Minimax if API key exists, otherwise Ollama
+            provider: "groq", "minimax", "ollama", or "auto" (default)
+                      auto = use Groq if key exists, otherwise Minimax, otherwise Ollama
         """
         self.provider = self._determine_provider(provider)
 
-        if self.provider == "minimax":
+        if self.provider == "groq":
+            self.model = GROQ_MODEL
+            self._verify_groq()
+        elif self.provider == "minimax":
             self.model = MINIMAX_MODEL
             self.base_url = MINIMAX_BASE_URL
             self._verify_minimax()
@@ -83,14 +88,42 @@ Retorne EXATAMENTE {num_clips} cortes."""
         provider = provider or AI_PROVIDER
 
         if provider == "auto":
-            # Use Minimax if API key is available and not empty/placeholder
-            if MINIMAX_API_KEY and MINIMAX_API_KEY.strip() and not MINIMAX_API_KEY.startswith("your-"):
+            # Use Groq if API key is available and not empty/placeholder
+            if GROQ_API_KEY and GROQ_API_KEY.strip() and not GROQ_API_KEY.startswith("your-"):
+                return "groq"
+            # Otherwise try Minimax
+            elif MINIMAX_API_KEY and MINIMAX_API_KEY.strip() and not MINIMAX_API_KEY.startswith("your-"):
                 return "minimax"
             else:
-                print("⚠️  MINIMAX_API_KEY não configurada, usando Ollama local")
+                print("⚠️  Nenhuma API key configurada, usando Ollama local")
                 return "ollama"
 
         return provider
+
+    def _verify_groq(self):
+        """Verify Groq API key is configured"""
+        if not GROQ_API_KEY:
+            raise ValueError(
+                "\n❌ GROQ_API_KEY não configurada!\n"
+                "   \n"
+                "   Para configurar:\n"
+                "   1. Acesse: https://console.groq.com/keys\n"
+                "   2. Crie uma API key gratuita\n"
+                "   3. Adicione no .env: GROQ_API_KEY=sua_chave_aqui\n"
+            )
+
+        # Test connection
+        try:
+            response = httpx.get(
+                "https://api.groq.com/openai/v1/models",
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+                timeout=10
+            )
+            if response.status_code != 200:
+                raise ConnectionError(f"Groq API error: {response.status_code}")
+            print("✅ Groq API conectada com sucesso!")
+        except httpx.ConnectError:
+            raise ConnectionError("❌ Não foi possível conectar à API do Groq")
 
     def _verify_minimax(self):
         """Verify Minimax API key is configured"""
@@ -182,6 +215,40 @@ Retorne EXATAMENTE {num_clips} cortes."""
         except (ValueError, IndexError):
             return 0
 
+    def _call_groq(self, prompt: str) -> str:
+        """Call Groq API (OpenAI-compatible)"""
+        print(f"⚡ Chamando Groq ({self.model})... (muito mais rápido!)")
+
+        response = httpx.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": self.model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "Você é um assistente especializado em análise de conteúdo viral. Sempre responda em JSON válido."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                "temperature": 0.7,
+                "max_tokens": 4096,
+            },
+            timeout=httpx.Timeout(120.0, connect=30.0)
+        )
+
+        if response.status_code != 200:
+            error_detail = response.json().get("error", {}).get("message", response.text)
+            raise Exception(f"Groq API error: {error_detail}")
+
+        return response.json()["choices"][0]["message"]["content"]
+
     def _call_minimax(self, prompt: str) -> str:
         """Call Minimax API (Anthropic-compatible endpoint)"""
         print(f"⚡ Chamando Minimax ({self.model})...")
@@ -250,7 +317,9 @@ Retorne EXATAMENTE {num_clips} cortes."""
 
     def _call_ai(self, prompt: str) -> str:
         """Call the configured AI provider"""
-        if self.provider == "minimax":
+        if self.provider == "groq":
+            return self._call_groq(prompt)
+        elif self.provider == "minimax":
             return self._call_minimax(prompt)
         else:
             return self._call_ollama(prompt)
@@ -326,7 +395,8 @@ Retorne EXATAMENTE {num_clips} cortes."""
             transcription=formatted_transcription
         )
 
-        provider_name = "Minimax" if self.provider == "minimax" else "Ollama"
+        provider_names = {"groq": "Groq", "minimax": "Minimax", "ollama": "Ollama"}
+        provider_name = provider_names.get(self.provider, self.provider)
         print(f"📊 Analisando transcrição com {provider_name}... (solicitando {num_clips} cortes)")
 
         # Call AI

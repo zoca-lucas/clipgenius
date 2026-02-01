@@ -13,6 +13,7 @@ from config import CLIPS_DIR, VIDEOS_DIR
 from models import init_db
 from api.routes import router
 from api.auth_routes import router as auth_router
+from api.editor_routes import router as editor_router
 
 
 # CORS configuration from environment
@@ -57,6 +58,7 @@ app.mount("/clips", StaticFiles(directory=str(CLIPS_DIR)), name="clips")
 # Include API routes
 app.include_router(router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
+app.include_router(editor_router, prefix="/api")
 
 
 @app.get("/")

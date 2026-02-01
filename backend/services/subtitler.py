@@ -13,6 +13,12 @@ from config import (
     SUBTITLE_INACTIVE_COLOR,
     SUBTITLE_SCALE_EFFECT,
     SUBTITLE_SCALE_AMOUNT,
+    SUBTITLE_FONT_NAME,
+    SUBTITLE_FONT_SIZE,
+    SUBTITLE_FONT_BOLD,
+    SUBTITLE_OUTLINE_SIZE,
+    SUBTITLE_SHADOW_SIZE,
+    SUBTITLE_MARGIN_V,
 )
 
 
@@ -20,32 +26,37 @@ class SubtitleGenerator:
     """Service to generate and apply subtitles to video clips"""
 
     # Default subtitle style (ASS format) - Optimized for vertical video (9:16)
+    # Uses config values for customization
     DEFAULT_STYLE = {
-        'font_name': 'Arial',
-        'font_size': 32,  # Increased for vertical video readability
+        'font_name': SUBTITLE_FONT_NAME,
+        'font_size': SUBTITLE_FONT_SIZE,
         'primary_color': '&H00FFFFFF',  # White
         'outline_color': '&H00000000',  # Black outline
         'back_color': '&H80000000',  # Semi-transparent black
-        'bold': True,
-        'outline': 3,  # Thicker outline for better visibility
-        'shadow': 2,  # Stronger shadow for depth
-        'alignment': 2,  # Bottom center
-        'margin_v': 80,  # Larger margin for vertical format
+        'bold': SUBTITLE_FONT_BOLD,
+        'outline': SUBTITLE_OUTLINE_SIZE,
+        'shadow': SUBTITLE_SHADOW_SIZE,
+        'alignment': 2,  # Bottom center (ASS alignment: 1=left, 2=center, 3=right; +4=middle, +8=top)
+        'margin_v': SUBTITLE_MARGIN_V,
+        'margin_l': 50,  # Equal left margin for centering
+        'margin_r': 50,  # Equal right margin for centering
     }
 
     # Karaoke style - TikTok/Reels viral effect
     KARAOKE_STYLE = {
-        'font_name': 'Arial',
-        'font_size': 36,
+        'font_name': SUBTITLE_FONT_NAME,
+        'font_size': SUBTITLE_FONT_SIZE,
         'primary_color': SUBTITLE_HIGHLIGHT_COLOR,    # Active word color (yellow)
         'secondary_color': SUBTITLE_INACTIVE_COLOR,   # Inactive words (white)
         'outline_color': '&H00000000',
         'back_color': '&H80000000',
-        'bold': True,
-        'outline': 4,
-        'shadow': 2,
-        'alignment': 2,
-        'margin_v': 100,
+        'bold': SUBTITLE_FONT_BOLD,
+        'outline': SUBTITLE_OUTLINE_SIZE,
+        'shadow': SUBTITLE_SHADOW_SIZE,
+        'alignment': 2,  # Bottom center
+        'margin_v': SUBTITLE_MARGIN_V,
+        'margin_l': 50,  # Equal left margin for centering
+        'margin_r': 50,  # Equal right margin for centering
     }
 
     def __init__(self):
@@ -228,17 +239,22 @@ class SubtitleGenerator:
         output_path = Path(output_path)
         style = {**self.DEFAULT_STYLE, **(style or {})}
 
-        # ASS header
+        # Get margin values with defaults
+        margin_l = style.get('margin_l', 50)
+        margin_r = style.get('margin_r', 50)
+
+        # ASS header - WrapStyle 2 = no word wrapping (end of line wrapping only)
         ass_content = f"""[Script Info]
 Title: ClipGenius Subtitles
 ScriptType: v4.00+
 PlayResX: {video_width}
 PlayResY: {video_height}
-WrapStyle: 0
+WrapStyle: 2
+ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{style['font_name']},{style['font_size']},{style['primary_color']},&H000000FF,{style['outline_color']},{style['back_color']},{-1 if style['bold'] else 0},0,0,0,100,100,0,0,1,{style['outline']},{style['shadow']},{style['alignment']},10,10,{style['margin_v']},1
+Style: Default,{style['font_name']},{style['font_size']},{style['primary_color']},&H000000FF,{style['outline_color']},{style['back_color']},{-1 if style['bold'] else 0},0,0,0,100,100,0,0,1,{style['outline']},{style['shadow']},{style['alignment']},{margin_l},{margin_r},{style['margin_v']},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -394,17 +410,22 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         # Merge styles
         style = {**self.KARAOKE_STYLE, **(style or {})}
 
-        # ASS header with karaoke style
+        # Get margin values with defaults
+        margin_l = style.get('margin_l', 50)
+        margin_r = style.get('margin_r', 50)
+
+        # ASS header with karaoke style - WrapStyle 2 = no word wrapping
         ass_content = f"""[Script Info]
 Title: ClipGenius Karaoke Subtitles
 ScriptType: v4.00+
 PlayResX: {video_width}
 PlayResY: {video_height}
-WrapStyle: 0
+WrapStyle: 2
+ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Karaoke,{style['font_name']},{style['font_size']},{style['secondary_color']},&H000000FF,{style['outline_color']},{style['back_color']},{-1 if style['bold'] else 0},0,0,0,100,100,0,0,1,{style['outline']},{style['shadow']},{style['alignment']},10,10,{style['margin_v']},1
+Style: Karaoke,{style['font_name']},{style['font_size']},{style['secondary_color']},&H000000FF,{style['outline_color']},{style['back_color']},{-1 if style['bold'] else 0},0,0,0,100,100,0,0,1,{style['outline']},{style['shadow']},{style['alignment']},{margin_l},{margin_r},{style['margin_v']},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -476,36 +497,54 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         else:
             output_path = Path(output_path)
 
-        # Escape special characters in subtitle path for FFmpeg filter
-        sub_path_escaped = str(subtitle_path).replace('\\', '/').replace(':', r'\:')
+        import tempfile
+        import shutil
+        import os
 
-        # Determine subtitle filter based on file type
-        if subtitle_path.suffix.lower() == '.ass':
-            sub_filter = f"ass='{sub_path_escaped}'"
-        else:
-            sub_filter = f"subtitles='{sub_path_escaped}'"
-
-        cmd = [
-            'ffmpeg',
-            '-i', str(video_path),
-            '-vf', sub_filter,
-            '-c:v', 'libx264',
-            '-preset', 'fast',
-            '-crf', '23',
-            '-c:a', 'copy',
-            '-y',
-            str(output_path)
-        ]
-
-        print(f"Burning subtitles: {video_path} + {subtitle_path}")
+        # Create a temporary file with no spaces in path for FFmpeg compatibility
+        temp_dir = tempfile.mkdtemp()
+        temp_subtitle = Path(temp_dir) / f"subtitle{subtitle_path.suffix}"
+        shutil.copy2(subtitle_path, temp_subtitle)
 
         try:
-            subprocess.run(cmd, check=True, capture_output=True)
-        except subprocess.CalledProcessError as e:
-            print(f"FFmpeg error: {e.stderr.decode()}")
-            raise
+            # Determine subtitle filter based on file type
+            if subtitle_path.suffix.lower() == '.ass':
+                sub_filter = f"ass='{temp_subtitle}'"
+            else:
+                sub_filter = f"subtitles='{temp_subtitle}'"
 
-        return str(output_path)
+            cmd = [
+                'ffmpeg',
+                '-i', str(video_path),
+                '-vf', sub_filter,
+                '-c:v', 'libx264',
+                '-preset', 'fast',
+                '-crf', '23',
+                '-c:a', 'copy',
+                '-y',
+                str(output_path)
+            ]
+
+            print(f"Burning subtitles: {video_path} + {subtitle_path}")
+
+            try:
+                result = subprocess.run(cmd, check=True, capture_output=True)
+                return str(output_path)
+            except subprocess.CalledProcessError as e:
+                error_msg = e.stderr.decode() if e.stderr else str(e)
+                print(f"⚠️ FFmpeg subtitle burning failed: {error_msg[:200]}")
+
+                # If subtitle burning fails (no libass, invalid filter, etc.)
+                # Copy original video as fallback
+                if "No such filter" in error_msg or "No option name" in error_msg or e.returncode == 234:
+                    print("   libass not available - copying video without burned subtitles")
+                    import shutil as sh
+                    sh.copy2(video_path, output_path)
+                    return str(output_path)
+                raise
+        finally:
+            # Cleanup temp directory
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
     def burn_subtitles_drawtext(
         self,

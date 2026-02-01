@@ -52,20 +52,25 @@ for dir_path in [VIDEOS_DIR, CLIPS_DIR, AUDIO_DIR]:
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATA_DIR}/database.db")
 
 # AI Provider settings
+# Groq API (FREE cloud API - fast and high quality)
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+
 # Minimax API (uses Anthropic-compatible endpoint)
 MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY", "")
 MINIMAX_MODEL = os.getenv("MINIMAX_MODEL", "minimax/minimax-m2")
 MINIMAX_BASE_URL = os.getenv("MINIMAX_BASE_URL", "https://api.minimax.io/anthropic")
 
-# Ollama settings (FREE local AI - fallback if no Minimax API key)
+# Ollama settings (FREE local AI - fallback if no cloud API key)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1")
 
-# AI Provider selection: "minimax" (default if API key exists) or "ollama"
-AI_PROVIDER = os.getenv("AI_PROVIDER", "auto")  # auto, minimax, or ollama
+# AI Provider selection: "groq", "minimax", "ollama", or "auto"
+# auto = use Groq if key exists, otherwise Minimax, otherwise Ollama
+AI_PROVIDER = os.getenv("AI_PROVIDER", "auto")
 
 # Validate AI Provider
-VALID_AI_PROVIDERS = ["auto", "minimax", "ollama"]
+VALID_AI_PROVIDERS = ["auto", "groq", "minimax", "ollama"]
 if AI_PROVIDER not in VALID_AI_PROVIDERS:
     print(f"⚠️  AI_PROVIDER inválido: '{AI_PROVIDER}', usando 'auto'")
     AI_PROVIDER = "auto"
@@ -160,6 +165,16 @@ SUBTITLE_INACTIVE_COLOR = os.getenv("SUBTITLE_INACTIVE_COLOR", "&HFFFFFF&")  # W
 SUBTITLE_SCALE_EFFECT = os.getenv("SUBTITLE_SCALE_EFFECT", "true").lower() == "true"
 SUBTITLE_SCALE_AMOUNT = _safe_int(os.getenv("SUBTITLE_SCALE_AMOUNT", "110"), 110, "SUBTITLE_SCALE_AMOUNT")  # 110%
 
+# Subtitle Font Settings
+# Common fonts: Arial, Helvetica, Roboto, Montserrat, Open Sans, Poppins, Inter
+# For best results, use a font installed on your system
+SUBTITLE_FONT_NAME = os.getenv("SUBTITLE_FONT_NAME", "Arial")
+SUBTITLE_FONT_SIZE = _safe_int(os.getenv("SUBTITLE_FONT_SIZE", "42"), 42, "SUBTITLE_FONT_SIZE")
+SUBTITLE_FONT_BOLD = os.getenv("SUBTITLE_FONT_BOLD", "true").lower() == "true"
+SUBTITLE_OUTLINE_SIZE = _safe_int(os.getenv("SUBTITLE_OUTLINE_SIZE", "4"), 4, "SUBTITLE_OUTLINE_SIZE")
+SUBTITLE_SHADOW_SIZE = _safe_int(os.getenv("SUBTITLE_SHADOW_SIZE", "2"), 2, "SUBTITLE_SHADOW_SIZE")
+SUBTITLE_MARGIN_V = _safe_int(os.getenv("SUBTITLE_MARGIN_V", "120"), 120, "SUBTITLE_MARGIN_V")  # Vertical margin from bottom
+
 # JWT Authentication settings
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-super-secret-key-change-in-production-at-least-32-chars")
 JWT_ALGORITHM = "HS256"
@@ -187,12 +202,14 @@ MERCADOPAGO_ACCESS_TOKEN = os.getenv("MERCADOPAGO_ACCESS_TOKEN", "")
 # Startup validation message
 def _print_config_summary():
     """Print configuration summary on startup"""
-    api_key_status = "✅ Configurada" if MINIMAX_API_KEY and not MINIMAX_API_KEY.startswith("your-") else "❌ Não configurada"
+    groq_status = "✅ Configurada" if GROQ_API_KEY and not GROQ_API_KEY.startswith("your-") else "❌ Não configurada"
+    minimax_status = "✅ Configurada" if MINIMAX_API_KEY and not MINIMAX_API_KEY.startswith("your-") else "❌ Não configurada"
     print("\n" + "=" * 50)
     print("📋 ClipGenius - Configuração")
     print("=" * 50)
     print(f"   AI Provider: {AI_PROVIDER}")
-    print(f"   Minimax API Key: {api_key_status}")
+    print(f"   Groq API Key: {groq_status}")
+    print(f"   Minimax API Key: {minimax_status}")
     print(f"   Whisper Model: {WHISPER_MODEL}")
     print(f"   AI Reframe: {'Ativado' if ENABLE_AI_REFRAME else 'Desativado'}")
     print(f"   Data Directory: {DATA_DIR}")

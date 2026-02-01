@@ -200,36 +200,18 @@ def process_video(project_id: int):
             update_progress(db, project, ProjectStatus.DOWNLOADING.value, 15,
                            "Vídeo já existe, pulando download...")
         else:
-            # Detect source from URL
-            source = detect_url_source(project.youtube_url)
+            update_progress(db, project, ProjectStatus.DOWNLOADING.value, 0,
+                           "Iniciando download do YouTube...")
 
-            if source == "google_drive":
-                update_progress(db, project, ProjectStatus.DOWNLOADING.value, 0,
-                               "Iniciando download do Google Drive...")
+            # Download with progress simulation (yt-dlp doesn't give easy progress)
+            update_progress(db, project, ProjectStatus.DOWNLOADING.value, 5,
+                           "Conectando ao YouTube...")
 
-                update_progress(db, project, ProjectStatus.DOWNLOADING.value, 5,
-                               "Conectando ao Google Drive...")
-
-                video_info = google_drive_downloader.download(
-                    project.youtube_url,
-                    project.youtube_id
-                )
-                project.title = video_info.get('title') or project.title
-                project.video_path = video_info['video_path']
-                # Duration and thumbnail not available from Google Drive
-            else:
-                # Default to YouTube
-                update_progress(db, project, ProjectStatus.DOWNLOADING.value, 0,
-                               "Iniciando download do YouTube...")
-
-                update_progress(db, project, ProjectStatus.DOWNLOADING.value, 5,
-                               "Conectando ao YouTube...")
-
-                video_info = downloader.download(project.youtube_url, project.youtube_id)
-                project.title = video_info['title']
-                project.duration = video_info['duration']
-                project.thumbnail_url = video_info['thumbnail']
-                project.video_path = video_info['video_path']
+            video_info = downloader.download(project.youtube_url, project.youtube_id)
+            project.title = video_info['title']
+            project.duration = video_info['duration']
+            project.thumbnail_url = video_info['thumbnail']
+            project.video_path = video_info['video_path']
 
             update_progress(db, project, ProjectStatus.DOWNLOADING.value, 15,
                            "Download concluído!")
@@ -383,36 +365,19 @@ def process_video(project_id: int):
 
 # ============ Project Endpoints ============
 
-def detect_url_source(url: str) -> str:
-    """Detect if URL is YouTube, Google Drive, or unknown"""
-    if downloader.validate_url(url):
-        return "youtube"
-    if google_drive_downloader.validate_url(url):
-        return "google_drive"
-    return "unknown"
-
-
 @router.post("/projects", response_model=ProjectResponse)
 async def create_project(
     project_data: ProjectCreate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
-    """Create a new project from YouTube or Google Drive URL"""
-    url = project_data.url
-    source = detect_url_source(url)
+    """Create a new project from YouTube URL"""
+    # Validate URL
+    if not downloader.validate_url(project_data.url):
+        raise HTTPException(status_code=400, detail="Invalid YouTube URL")
 
-    if source == "unknown":
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid URL. Please provide a valid YouTube or Google Drive URL."
-        )
-
-    # Extract video ID based on source
-    if source == "youtube":
-        video_id = downloader.extract_video_id(url)
-    else:  # google_drive
-        video_id = google_drive_downloader.extract_file_id(url)
+    # Extract video ID
+    video_id = downloader.extract_video_id(project_data.url)
 
     # Check if project already exists
     existing = db.query(Project).filter(Project.youtube_id == video_id).first()
@@ -431,18 +396,15 @@ async def create_project(
             clips_count=len(existing.clips)
         )
 
-    # Get video info based on source
+    # Get video info
     try:
-        if source == "youtube":
-            video_info = downloader.get_video_info(url)
-        else:  # google_drive
-            video_info = google_drive_downloader.get_file_info(url)
+        video_info = downloader.get_video_info(project_data.url)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Could not fetch video info: {str(e)}")
 
     # Create project
     project = Project(
-        youtube_url=url,  # Store original URL regardless of source
+        youtube_url=project_data.url,
         youtube_id=video_id,
         title=video_info.get('title'),
         duration=video_info.get('duration'),

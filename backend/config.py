@@ -2,10 +2,40 @@
 ClipGenius - Configuration
 """
 import os
+import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+def _safe_int(value: str, default: int, name: str) -> int:
+    """Safely convert string to int with validation"""
+    try:
+        result = int(value)
+        if result < 0:
+            print(f"⚠️  {name} deve ser >= 0, usando valor padrão: {default}")
+            return default
+        return result
+    except (ValueError, TypeError):
+        print(f"⚠️  {name} inválido: '{value}', usando valor padrão: {default}")
+        return default
+
+
+def _safe_float(value: str, default: float, name: str, min_val: float = None, max_val: float = None) -> float:
+    """Safely convert string to float with validation"""
+    try:
+        result = float(value)
+        if min_val is not None and result < min_val:
+            print(f"⚠️  {name} deve ser >= {min_val}, usando valor padrão: {default}")
+            return default
+        if max_val is not None and result > max_val:
+            print(f"⚠️  {name} deve ser <= {max_val}, usando valor padrão: {default}")
+            return default
+        return result
+    except (ValueError, TypeError):
+        print(f"⚠️  {name} inválido: '{value}', usando valor padrão: {default}")
+        return default
 
 # Base paths - sempre usar caminhos absolutos para evitar problemas com FFmpeg
 BASE_DIR = Path(__file__).parent.parent.resolve()
@@ -22,27 +52,40 @@ for dir_path in [VIDEOS_DIR, CLIPS_DIR, AUDIO_DIR]:
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DATA_DIR}/database.db")
 
 # AI Provider settings
-# Groq (FREE cloud API - much faster and better quality)
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")  # Best quality model
+# Minimax API (uses Anthropic-compatible endpoint)
+MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY", "")
+MINIMAX_MODEL = os.getenv("MINIMAX_MODEL", "minimax/minimax-m2")
+MINIMAX_BASE_URL = os.getenv("MINIMAX_BASE_URL", "https://api.minimax.io/anthropic")
 
-# Ollama settings (FREE local AI - fallback if no Groq API key)
+# Ollama settings (FREE local AI - fallback if no Minimax API key)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1")
 
-# AI Provider selection: "groq" (default if API key exists) or "ollama"
-AI_PROVIDER = os.getenv("AI_PROVIDER", "auto")  # auto, groq, or ollama
+# AI Provider selection: "minimax" (default if API key exists) or "ollama"
+AI_PROVIDER = os.getenv("AI_PROVIDER", "auto")  # auto, minimax, or ollama
+
+# Validate AI Provider
+VALID_AI_PROVIDERS = ["auto", "minimax", "ollama"]
+if AI_PROVIDER not in VALID_AI_PROVIDERS:
+    print(f"⚠️  AI_PROVIDER inválido: '{AI_PROVIDER}', usando 'auto'")
+    AI_PROVIDER = "auto"
 
 # Whisper settings - OPTIMIZED for better quality
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")  # tiny, base, small, medium, large
 WHISPER_LANGUAGE = os.getenv("WHISPER_LANGUAGE", "pt")  # Portuguese by default
-WHISPER_TEMPERATURE = float(os.getenv("WHISPER_TEMPERATURE", "0.0"))  # Lower = more consistent
-WHISPER_BEAM_SIZE = int(os.getenv("WHISPER_BEAM_SIZE", "5"))  # Higher = better quality, slower
-WHISPER_BEST_OF = int(os.getenv("WHISPER_BEST_OF", "5"))  # Number of candidates
+WHISPER_TEMPERATURE = _safe_float(os.getenv("WHISPER_TEMPERATURE", "0.0"), 0.0, "WHISPER_TEMPERATURE", 0.0, 1.0)
+WHISPER_BEAM_SIZE = _safe_int(os.getenv("WHISPER_BEAM_SIZE", "1"), 1, "WHISPER_BEAM_SIZE")
+WHISPER_BEST_OF = _safe_int(os.getenv("WHISPER_BEST_OF", "1"), 1, "WHISPER_BEST_OF")
+
+# Validate Whisper model
+VALID_WHISPER_MODELS = ["tiny", "base", "small", "medium", "large"]
+if WHISPER_MODEL not in VALID_WHISPER_MODELS:
+    print(f"⚠️  WHISPER_MODEL inválido: '{WHISPER_MODEL}', usando 'base'")
+    WHISPER_MODEL = "base"
 
 # Download settings - RETRY mechanism
-DOWNLOAD_MAX_RETRIES = int(os.getenv("DOWNLOAD_MAX_RETRIES", "3"))
-DOWNLOAD_RETRY_DELAY = int(os.getenv("DOWNLOAD_RETRY_DELAY", "5"))  # seconds between retries
+DOWNLOAD_MAX_RETRIES = _safe_int(os.getenv("DOWNLOAD_MAX_RETRIES", "3"), 3, "DOWNLOAD_MAX_RETRIES")
+DOWNLOAD_RETRY_DELAY = _safe_int(os.getenv("DOWNLOAD_RETRY_DELAY", "5"), 5, "DOWNLOAD_RETRY_DELAY")
 
 # Video settings
 MAX_VIDEO_DURATION = 3600 * 3  # 3 hours max
@@ -95,7 +138,7 @@ OUTPUT_FORMATS = {
 DEFAULT_OUTPUT_FORMAT = "vertical"
 
 # Upload settings
-MAX_UPLOAD_SIZE = int(os.getenv("MAX_UPLOAD_SIZE", str(500 * 1024 * 1024)))  # 500MB default
+MAX_UPLOAD_SIZE = _safe_int(os.getenv("MAX_UPLOAD_SIZE", str(500 * 1024 * 1024)), 500 * 1024 * 1024, "MAX_UPLOAD_SIZE")
 ALLOWED_VIDEO_EXTENSIONS = [".mp4", ".mov", ".avi", ".mkv", ".webm"]
 ALLOWED_MIME_TYPES = [
     "video/mp4",
@@ -107,5 +150,55 @@ ALLOWED_MIME_TYPES = [
 
 # AI Reframe settings - Face tracking for vertical video
 ENABLE_AI_REFRAME = os.getenv("ENABLE_AI_REFRAME", "true").lower() == "true"
-REFRAME_SAMPLE_INTERVAL = float(os.getenv("REFRAME_SAMPLE_INTERVAL", "0.5"))  # Face detection every 0.5s
+REFRAME_SAMPLE_INTERVAL = _safe_float(os.getenv("REFRAME_SAMPLE_INTERVAL", "0.5"), 0.5, "REFRAME_SAMPLE_INTERVAL", 0.1, 5.0)
 REFRAME_DYNAMIC_MODE = os.getenv("REFRAME_DYNAMIC_MODE", "false").lower() == "true"  # Frame-by-frame (slower)
+
+# Karaoke Subtitle Settings - TikTok/Reels style word-by-word highlighting
+SUBTITLE_KARAOKE_ENABLED = os.getenv("SUBTITLE_KARAOKE_ENABLED", "true").lower() == "true"
+SUBTITLE_HIGHLIGHT_COLOR = os.getenv("SUBTITLE_HIGHLIGHT_COLOR", "&H00FFFF&")  # Yellow (BGR format)
+SUBTITLE_INACTIVE_COLOR = os.getenv("SUBTITLE_INACTIVE_COLOR", "&HFFFFFF&")  # White
+SUBTITLE_SCALE_EFFECT = os.getenv("SUBTITLE_SCALE_EFFECT", "true").lower() == "true"
+SUBTITLE_SCALE_AMOUNT = _safe_int(os.getenv("SUBTITLE_SCALE_AMOUNT", "110"), 110, "SUBTITLE_SCALE_AMOUNT")  # 110%
+
+# JWT Authentication settings
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-super-secret-key-change-in-production-at-least-32-chars")
+JWT_ALGORITHM = "HS256"
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES = _safe_int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "30"), 30, "JWT_ACCESS_TOKEN_EXPIRE_MINUTES")
+JWT_REFRESH_TOKEN_EXPIRE_DAYS = _safe_int(os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", "7"), 7, "JWT_REFRESH_TOKEN_EXPIRE_DAYS")
+
+# Google OAuth settings (for Drive integration)
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8000/api/auth/google/callback")
+
+# Social Media OAuth settings
+TIKTOK_CLIENT_KEY = os.getenv("TIKTOK_CLIENT_KEY", "")
+TIKTOK_CLIENT_SECRET = os.getenv("TIKTOK_CLIENT_SECRET", "")
+INSTAGRAM_CLIENT_ID = os.getenv("INSTAGRAM_CLIENT_ID", "")
+INSTAGRAM_CLIENT_SECRET = os.getenv("INSTAGRAM_CLIENT_SECRET", "")
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
+
+# Payment settings
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+MERCADOPAGO_ACCESS_TOKEN = os.getenv("MERCADOPAGO_ACCESS_TOKEN", "")
+
+
+# Startup validation message
+def _print_config_summary():
+    """Print configuration summary on startup"""
+    api_key_status = "✅ Configurada" if MINIMAX_API_KEY and not MINIMAX_API_KEY.startswith("your-") else "❌ Não configurada"
+    print("\n" + "=" * 50)
+    print("📋 ClipGenius - Configuração")
+    print("=" * 50)
+    print(f"   AI Provider: {AI_PROVIDER}")
+    print(f"   Minimax API Key: {api_key_status}")
+    print(f"   Whisper Model: {WHISPER_MODEL}")
+    print(f"   AI Reframe: {'Ativado' if ENABLE_AI_REFRAME else 'Desativado'}")
+    print(f"   Data Directory: {DATA_DIR}")
+    print("=" * 50 + "\n")
+
+
+# Only print summary when running as main app (not during imports for tests)
+if os.getenv("CLIPGENIUS_PRINT_CONFIG", "true").lower() == "true":
+    _print_config_summary()

@@ -175,58 +175,64 @@ class AIReframer:
         if not MEDIAPIPE_AVAILABLE or not CV2_AVAILABLE or self.face_detector is None:
             return []
 
-        cap = cv2.VideoCapture(str(video_path))
-        if not cap.isOpened():
-            raise ValueError(f"Could not open video: {video_path}")
+        cap = None
+        try:
+            cap = cv2.VideoCapture(str(video_path))
+            if not cap.isOpened():
+                raise ValueError(f"Could not open video: {video_path}")
 
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        duration = total_frames / fps if fps > 0 else 0
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            duration = total_frames / fps if fps > 0 else 0
 
-        if end_time is None:
-            end_time = duration
+            if end_time is None:
+                end_time = duration
 
-        face_positions = []
-        sample_frames = int(sample_interval * fps)
+            face_positions = []
+            sample_frames = int(sample_interval * fps)
 
-        start_frame = int(start_time * fps)
-        end_frame = int(end_time * fps)
+            start_frame = int(start_time * fps)
+            end_frame = int(end_time * fps)
 
-        print(f"Detecting faces from {start_time:.1f}s to {end_time:.1f}s (every {sample_interval}s)")
+            print(f"Detecting faces from {start_time:.1f}s to {end_time:.1f}s (every {sample_interval}s)")
 
-        frame_num = start_frame
-        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+            frame_num = start_frame
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
-        while frame_num < end_frame:
-            ret, frame = cap.read()
-            if not ret:
-                break
+            while frame_num < end_frame:
+                ret, frame = cap.read()
+                if not ret:
+                    break
 
-            # Convert to RGB for MediaPipe
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            timestamp = frame_num / fps
+                # Convert to RGB for MediaPipe
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                timestamp = frame_num / fps
 
-            face_data = self._detect_face_in_frame(rgb_frame)
+                face_data = self._detect_face_in_frame(rgb_frame)
 
-            if face_data:
-                center_x, center_y, width, height, confidence = face_data
-                face_positions.append(FacePosition(
-                    frame_num=frame_num,
-                    timestamp=timestamp,
-                    center_x=center_x,
-                    center_y=center_y,
-                    width=width,
-                    height=height,
-                    confidence=confidence
-                ))
+                if face_data:
+                    center_x, center_y, width, height, confidence = face_data
+                    face_positions.append(FacePosition(
+                        frame_num=frame_num,
+                        timestamp=timestamp,
+                        center_x=center_x,
+                        center_y=center_y,
+                        width=width,
+                        height=height,
+                        confidence=confidence
+                    ))
 
-            # Skip to next sample
-            frame_num += sample_frames
-            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
+                # Skip to next sample
+                frame_num += sample_frames
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
 
-        cap.release()
-        print(f"Detected {len(face_positions)} face positions")
-        return face_positions
+            print(f"Detected {len(face_positions)} face positions")
+            return face_positions
+
+        finally:
+            # Always release VideoCapture
+            if cap is not None:
+                cap.release()
 
     def smooth_positions(
         self,
@@ -501,8 +507,20 @@ class AIReframer:
         try:
             subprocess.run(cmd, check=True, capture_output=True)
         except subprocess.CalledProcessError as e:
-            print(f"FFmpeg error: {e.stderr.decode()}")
-            raise
+            # Clean up partial file on failure
+            if output_path.exists():
+                try:
+                    output_path.unlink()
+                    print(f"Cleaned up partial file: {output_path}")
+                except Exception:
+                    pass
+            error_msg = e.stderr.decode() if e.stderr else str(e)
+            print(f"FFmpeg error: {error_msg}")
+            raise RuntimeError(f"Failed to cut clip with tracking: {error_msg}")
+
+        # Verify output file was created
+        if not output_path.exists():
+            raise RuntimeError(f"FFmpeg completed but output file not found: {output_path}")
 
         tracking_was_used = enable_tracking and self.face_detector is not None
 
@@ -572,45 +590,53 @@ class AIReframer:
         interpolated = self.interpolate_positions(smoothed, fps, start_time, end_time)
 
         # Process video frame by frame
-        cap = cv2.VideoCapture(str(video_path))
-        cap.set(cv2.CAP_PROP_POS_MSEC, start_time * 1000)
-
-        target_w, target_h = target_resolution
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(str(temp_video_path), fourcc, fps, (target_w, target_h))
-
+        cap = None
+        out = None
         frame_idx = 0
-        total_frames = len(interpolated)
 
-        print(f"Processing {total_frames} frames with dynamic crop...")
+        try:
+            cap = cv2.VideoCapture(str(video_path))
+            cap.set(cv2.CAP_PROP_POS_MSEC, start_time * 1000)
 
-        while frame_idx < total_frames:
-            ret, frame = cap.read()
-            if not ret:
-                break
+            target_w, target_h = target_resolution
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(str(temp_video_path), fourcc, fps, (target_w, target_h))
 
-            # Get interpolated face position for this frame
-            _, face_x, face_y = interpolated[frame_idx]
+            total_frames = len(interpolated)
 
-            # Calculate crop for this frame
-            crop_x, crop_y, crop_w, crop_h = self.calculate_dynamic_crop(
-                source_width, source_height, face_x, face_y
-            )
+            print(f"Processing {total_frames} frames with dynamic crop...")
 
-            # Apply crop
-            cropped = frame[crop_y:crop_y+crop_h, crop_x:crop_x+crop_w]
+            while frame_idx < total_frames:
+                ret, frame = cap.read()
+                if not ret:
+                    break
 
-            # Resize to target
-            resized = cv2.resize(cropped, (target_w, target_h))
+                # Get interpolated face position for this frame
+                _, face_x, face_y = interpolated[frame_idx]
 
-            out.write(resized)
-            frame_idx += 1
+                # Calculate crop for this frame
+                crop_x, crop_y, crop_w, crop_h = self.calculate_dynamic_crop(
+                    source_width, source_height, face_x, face_y
+                )
 
-            if frame_idx % 100 == 0:
-                print(f"  Processed {frame_idx}/{total_frames} frames")
+                # Apply crop
+                cropped = frame[crop_y:crop_y+crop_h, crop_x:crop_x+crop_w]
 
-        cap.release()
-        out.release()
+                # Resize to target
+                resized = cv2.resize(cropped, (target_w, target_h))
+
+                out.write(resized)
+                frame_idx += 1
+
+                if frame_idx % 100 == 0:
+                    print(f"  Processed {frame_idx}/{total_frames} frames")
+
+        finally:
+            # Always release video resources
+            if cap is not None:
+                cap.release()
+            if out is not None:
+                out.release()
 
         # Add audio using FFmpeg
         print("Adding audio track...")
@@ -632,10 +658,25 @@ class AIReframer:
             str(output_path)
         ]
 
-        subprocess.run(cmd, check=True, capture_output=True)
-
-        # Clean up temp file
-        temp_video_path.unlink(missing_ok=True)
+        try:
+            subprocess.run(cmd, check=True, capture_output=True)
+        except subprocess.CalledProcessError as e:
+            # Clean up files on failure
+            for path in [temp_video_path, output_path]:
+                if path.exists():
+                    try:
+                        path.unlink()
+                    except Exception:
+                        pass
+            error_msg = e.stderr.decode() if e.stderr else str(e)
+            raise RuntimeError(f"Failed to add audio: {error_msg}")
+        finally:
+            # Always clean up temp file
+            if temp_video_path.exists():
+                try:
+                    temp_video_path.unlink()
+                except Exception:
+                    pass
 
         return {
             'video_path': str(output_path),

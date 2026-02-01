@@ -16,3 +16,21 @@ httpx
 mediapipe
 opencv-python
 numpy
+
+# Authentication
+python-jose[cryptography]
+passlib[bcrypt]
+bcrypt
+
+# Payment integrations (optional)
+stripe
+# mercadopago  # Uncomment for MercadoPago support
+
+# Google Drive integration
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+
+# Social media integrations (optional)
+# tiktok-api
+# instagrapi

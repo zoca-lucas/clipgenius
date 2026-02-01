@@ -24,7 +24,7 @@ export default function Header() {
               href="/"
               className="text-gray-400 hover:text-white transition-colors text-sm font-medium"
             >
-              Início
+              Inicio
             </Link>
             <Link
               href="/projects"

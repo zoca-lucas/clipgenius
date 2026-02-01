@@ -2,6 +2,7 @@
 ClipGenius - API Routes
 """
 import json
+import subprocess
 import uuid
 import shutil
 from datetime import datetime
@@ -24,7 +25,7 @@ from config import (
     DEFAULT_OUTPUT_FORMAT
 )
 
-from models import get_db, Project, Clip, SessionLocal
+from models import get_db, Project, Clip, get_background_session, db_lock
 from models.project import ProjectStatus
 from services import (
     YouTubeDownloader,
@@ -88,7 +89,7 @@ def update_progress(
     step_progress: str = None
 ):
     """
-    Update project progress in database.
+    Update project progress in database with error handling.
 
     Args:
         db: Database session
@@ -98,16 +99,21 @@ def update_progress(
         message: Human-readable message
         step_progress: Optional step progress like "8/15"
     """
-    project.status = status
-    project.progress = min(100, max(0, progress))
-    project.progress_message = message
-    project.progress_step = step_progress
+    try:
+        project.status = status
+        project.progress = min(100, max(0, progress))
+        project.progress_message = message
+        project.progress_step = step_progress
 
-    # Set start time on first progress update
-    if project.progress_started_at is None:
-        project.progress_started_at = datetime.utcnow()
+        # Set start time on first progress update
+        if project.progress_started_at is None:
+            project.progress_started_at = datetime.utcnow()
 
-    db.commit()
+        db.commit()
+    except Exception as e:
+        print(f"⚠️ Failed to update progress: {e}")
+        db.rollback()
+        raise
 
 
 def cut_clip_with_optional_reframe(
@@ -165,30 +171,57 @@ def process_video(project_id: int):
     3. Analyze with AI (40-60%)
     4. Cut clips + subtitles (60-100%)
 
-    IMPORTANTE: Cria sua própria sessão SQLAlchemy para não depender do escopo da requisição HTTP.
+    Uses thread-safe database session and processing lock to prevent race conditions.
     """
-    db = SessionLocal()
+    db = get_background_session()
+    project = None
+
     try:
-        project = db.query(Project).filter(Project.id == project_id).first()
-        if not project:
-            db.close()
-            return
+        # Acquire lock and fetch project atomically
+        with db_lock:
+            project = db.query(Project).filter(Project.id == project_id).first()
+            if not project:
+                print(f"⚠️ Project {project_id} not found")
+                return
 
-        # Initialize progress tracking
-        project.progress_started_at = datetime.utcnow()
-        db.commit()
+            # Try to acquire processing lock
+            if not project.acquire_processing_lock():
+                print(f"⚠️ Project {project_id} is already being processed")
+                db.rollback()
+                return
 
-        try:
-            # ========== Step 1: Download (0-15%) ==========
-            if project.video_path and Path(project.video_path).exists():
-                print(f"📁 Video already exists, skipping download: {project.video_path}")
-                update_progress(db, project, ProjectStatus.DOWNLOADING.value, 15,
-                               "Vídeo já existe, pulando download...")
+            # Initialize progress tracking
+            project.progress_started_at = datetime.utcnow()
+            db.commit()
+
+        # ========== Step 1: Download (0-15%) ==========
+        if project.video_path and Path(project.video_path).exists():
+            print(f"📁 Video already exists, skipping download: {project.video_path}")
+            update_progress(db, project, ProjectStatus.DOWNLOADING.value, 15,
+                           "Vídeo já existe, pulando download...")
+        else:
+            # Detect source from URL
+            source = detect_url_source(project.youtube_url)
+
+            if source == "google_drive":
+                update_progress(db, project, ProjectStatus.DOWNLOADING.value, 0,
+                               "Iniciando download do Google Drive...")
+
+                update_progress(db, project, ProjectStatus.DOWNLOADING.value, 5,
+                               "Conectando ao Google Drive...")
+
+                video_info = google_drive_downloader.download(
+                    project.youtube_url,
+                    project.youtube_id
+                )
+                project.title = video_info.get('title') or project.title
+                project.video_path = video_info['video_path']
+                # Duration and thumbnail not available from Google Drive
             else:
+                # Default to YouTube
                 update_progress(db, project, ProjectStatus.DOWNLOADING.value, 0,
                                "Iniciando download do YouTube...")
 
-                # Download with progress simulation (yt-dlp doesn't give easy progress)
                 update_progress(db, project, ProjectStatus.DOWNLOADING.value, 5,
                                "Conectando ao YouTube...")
 
@@ -198,122 +231,166 @@ def process_video(project_id: int):
                 project.thumbnail_url = video_info['thumbnail']
                 project.video_path = video_info['video_path']
 
-                update_progress(db, project, ProjectStatus.DOWNLOADING.value, 15,
-                               "Download concluído!")
+            update_progress(db, project, ProjectStatus.DOWNLOADING.value, 15,
+                           "Download concluído!")
 
-            # ========== Step 2: Transcribe (15-40%) ==========
-            update_progress(db, project, ProjectStatus.TRANSCRIBING.value, 16,
-                           "Extraindo áudio do vídeo...")
+        # ========== Step 2: Transcribe (15-40%) ==========
+        update_progress(db, project, ProjectStatus.TRANSCRIBING.value, 16,
+                       "Extraindo áudio do vídeo...")
 
-            update_progress(db, project, ProjectStatus.TRANSCRIBING.value, 20,
-                           "Transcrevendo com Whisper AI...")
+        update_progress(db, project, ProjectStatus.TRANSCRIBING.value, 20,
+                       "Transcrevendo com Whisper AI...")
 
-            transcription = transcriber.transcribe_video(project.video_path)
-            project.audio_path = transcription.get('audio_path')
-            project.transcription = json.dumps(transcription)
+        transcription = transcriber.transcribe_video(project.video_path)
+        project.audio_path = transcription.get('audio_path')
+        project.transcription = json.dumps(transcription)
 
-            update_progress(db, project, ProjectStatus.TRANSCRIBING.value, 40,
-                           "Transcrição concluída!")
+        update_progress(db, project, ProjectStatus.TRANSCRIBING.value, 40,
+                       "Transcrição concluída!")
 
-            # ========== Step 3: Analyze with AI (40-60%) ==========
-            update_progress(db, project, ProjectStatus.ANALYZING.value, 41,
-                           "Enviando para análise de IA...")
+        # ========== Step 3: Analyze with AI (40-60%) ==========
+        update_progress(db, project, ProjectStatus.ANALYZING.value, 41,
+                       "Enviando para análise de IA...")
 
-            update_progress(db, project, ProjectStatus.ANALYZING.value, 45,
-                           "IA identificando momentos virais...")
+        update_progress(db, project, ProjectStatus.ANALYZING.value, 45,
+                       "IA identificando momentos virais...")
 
-            analyzer = get_analyzer()
-            clip_suggestions = analyzer.analyze(transcription)
+        analyzer = get_analyzer()
+        clip_suggestions = analyzer.analyze(transcription)
 
-            update_progress(db, project, ProjectStatus.ANALYZING.value, 60,
-                           f"IA encontrou {len(clip_suggestions)} momentos virais!")
+        update_progress(db, project, ProjectStatus.ANALYZING.value, 60,
+                       f"IA encontrou {len(clip_suggestions)} momentos virais!")
 
-            # ========== Step 4 & 5: Cut clips + subtitles (60-100%) ==========
-            total_clips = len(clip_suggestions)
-            clip_progress_weight = 40  # 40% do progresso total (60-100)
+        # ========== Step 4 & 5: Cut clips + subtitles (60-100%) ==========
+        total_clips = len(clip_suggestions)
+        clip_progress_weight = 40  # 40% do progresso total (60-100)
 
-            for i, suggestion in enumerate(clip_suggestions):
-                clip_num = i + 1
+        for i, suggestion in enumerate(clip_suggestions):
+            clip_num = i + 1
 
-                # Calculate progress within cutting phase
-                clip_progress = int(60 + (clip_progress_weight * clip_num / total_clips))
+            # Calculate progress within cutting phase
+            clip_progress = int(60 + (clip_progress_weight * clip_num / total_clips))
 
-                reframe_text = " com AI Reframe" if ENABLE_AI_REFRAME else ""
-                update_progress(
-                    db, project,
-                    ProjectStatus.CUTTING.value,
-                    clip_progress - 2,  # Slightly before completion
-                    f"Gerando corte {clip_num}/{total_clips}{reframe_text}...",
-                    f"{clip_num}/{total_clips}"
-                )
-
-                # Cut the clip with AI reframe (face tracking)
-                clip_name = f"{project.youtube_id}_clip_{clip_num:02d}"
-
-                clip_result = cut_clip_with_optional_reframe(
-                    video_path=project.video_path,
-                    start_time=suggestion['start_time'],
-                    end_time=suggestion['end_time'],
-                    output_name=clip_name,
-                    enable_reframe=ENABLE_AI_REFRAME
-                )
-
-                # Get transcription segment for this clip
-                segment = transcriber.get_text_for_timerange(
-                    transcription,
-                    suggestion['start_time'],
-                    suggestion['end_time']
-                )
-
-                # Add subtitles
-                words = segment.get('words', [])
-                if words:
-                    subtitle_result = subtitler.create_subtitled_clip(
-                        video_path=clip_result['video_path'],
-                        words=words,
-                        clip_start_time=suggestion['start_time'],
-                        output_name=clip_name
-                    )
-                else:
-                    subtitle_result = {}
-
-                # Create clip record
-                clip = Clip(
-                    project_id=project.id,
-                    start_time=suggestion['start_time'],
-                    end_time=suggestion['end_time'],
-                    duration=suggestion['duration'],
-                    title=suggestion['title'],
-                    viral_score=suggestion['viral_score'],
-                    score_justification=suggestion['justification'],
-                    video_path=clip_result['video_path'],
-                    video_path_with_subtitles=subtitle_result.get('video_path_with_subtitles'),
-                    subtitle_path=subtitle_result.get('subtitle_path'),
-                    transcription_segment=json.dumps(segment)
-                )
-                db.add(clip)
-                db.commit()
-
-            # Done!
+            reframe_text = " com AI Reframe" if ENABLE_AI_REFRAME else ""
             update_progress(
                 db, project,
-                ProjectStatus.COMPLETED.value,
-                100,
-                f"Concluído! {total_clips} cortes gerados com sucesso.",
-                f"{total_clips}/{total_clips}"
+                ProjectStatus.CUTTING.value,
+                clip_progress - 2,  # Slightly before completion
+                f"Gerando corte {clip_num}/{total_clips}{reframe_text}...",
+                f"{clip_num}/{total_clips}"
             )
 
-        except Exception as e:
-            project.status = ProjectStatus.ERROR.value
-            project.error_message = str(e)
-            project.progress_message = f"Erro: {str(e)}"
+            # Cut the clip with AI reframe (face tracking)
+            clip_name = f"{project.youtube_id}_clip_{clip_num:02d}"
+
+            clip_result = cut_clip_with_optional_reframe(
+                video_path=project.video_path,
+                start_time=suggestion['start_time'],
+                end_time=suggestion['end_time'],
+                output_name=clip_name,
+                enable_reframe=ENABLE_AI_REFRAME
+            )
+
+            # Get transcription segment for this clip
+            segment = transcriber.get_text_for_timerange(
+                transcription,
+                suggestion['start_time'],
+                suggestion['end_time']
+            )
+
+            # Add subtitles
+            words = segment.get('words', [])
+            if words:
+                subtitle_result = subtitler.create_subtitled_clip(
+                    video_path=clip_result['video_path'],
+                    words=words,
+                    clip_start_time=suggestion['start_time'],
+                    output_name=clip_name
+                )
+            else:
+                subtitle_result = {}
+
+            # Create clip record with atomic transaction
+            clip = Clip(
+                project_id=project.id,
+                start_time=suggestion['start_time'],
+                end_time=suggestion['end_time'],
+                duration=suggestion['duration'],
+                title=suggestion['title'],
+                viral_score=suggestion['viral_score'],
+                score_justification=suggestion['justification'],
+                video_path=clip_result['video_path'],
+                video_path_with_subtitles=subtitle_result.get('video_path_with_subtitles'),
+                subtitle_path=subtitle_result.get('subtitle_path'),
+                transcription_segment=json.dumps(segment)
+            )
+            db.add(clip)
             db.commit()
-            raise
+
+        # Done!
+        update_progress(
+            db, project,
+            ProjectStatus.COMPLETED.value,
+            100,
+            f"Concluído! {total_clips} cortes gerados com sucesso.",
+            f"{total_clips}/{total_clips}"
+        )
+
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"❌ Error processing project {project_id}: {e}")
+        print(f"   Traceback: {error_trace}")
+        db.rollback()  # Rollback any pending changes
+
+        # Create user-friendly error message
+        error_str = str(e)
+        if "ConnectionError" in error_str or "ConnectError" in error_str:
+            user_message = "Erro de conexão. Verifique se o Ollama está rodando ou se a API Groq está acessível."
+        elif "ffmpeg" in error_str.lower() or "ffprobe" in error_str.lower():
+            user_message = "Erro no processamento de vídeo. Verifique se o FFmpeg está instalado."
+        elif "whisper" in error_str.lower():
+            user_message = "Erro na transcrição de áudio. Verifique a instalação do Whisper."
+        elif "Private video" in error_str or "video unavailable" in error_str.lower():
+            user_message = "Vídeo indisponível ou privado no YouTube."
+        elif "copyright" in error_str.lower():
+            user_message = "Vídeo bloqueado por direitos autorais."
+        else:
+            user_message = f"Erro no processamento: {error_str[:200]}"
+
+        # Update project status to error
+        try:
+            if project:
+                project.status = ProjectStatus.ERROR.value
+                project.error_message = error_str[:500]  # Limit error message length
+                project.progress_message = user_message
+                db.commit()
+        except Exception as commit_error:
+            print(f"❌ Failed to update error status: {commit_error}")
+            db.rollback()
+
     finally:
-        db.close()
+        # Always release processing lock and close session
+        try:
+            if project:
+                project.release_processing_lock()
+                db.commit()
+        except Exception:
+            db.rollback()
+        finally:
+            db.close()
 
 
 # ============ Project Endpoints ============
+
+def detect_url_source(url: str) -> str:
+    """Detect if URL is YouTube, Google Drive, or unknown"""
+    if downloader.validate_url(url):
+        return "youtube"
+    if google_drive_downloader.validate_url(url):
+        return "google_drive"
+    return "unknown"
+
 
 @router.post("/projects", response_model=ProjectResponse)
 async def create_project(
@@ -321,13 +398,21 @@ async def create_project(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
-    """Create a new project from YouTube URL"""
-    # Validate URL
-    if not downloader.validate_url(project_data.url):
-        raise HTTPException(status_code=400, detail="Invalid YouTube URL")
+    """Create a new project from YouTube or Google Drive URL"""
+    url = project_data.url
+    source = detect_url_source(url)
 
-    # Extract video ID
-    video_id = downloader.extract_video_id(project_data.url)
+    if source == "unknown":
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid URL. Please provide a valid YouTube or Google Drive URL."
+        )
+
+    # Extract video ID based on source
+    if source == "youtube":
+        video_id = downloader.extract_video_id(url)
+    else:  # google_drive
+        video_id = google_drive_downloader.extract_file_id(url)
 
     # Check if project already exists
     existing = db.query(Project).filter(Project.youtube_id == video_id).first()
@@ -346,15 +431,18 @@ async def create_project(
             clips_count=len(existing.clips)
         )
 
-    # Get video info
+    # Get video info based on source
     try:
-        video_info = downloader.get_video_info(project_data.url)
+        if source == "youtube":
+            video_info = downloader.get_video_info(url)
+        else:  # google_drive
+            video_info = google_drive_downloader.get_file_info(url)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Could not fetch video info: {str(e)}")
 
     # Create project
     project = Project(
-        youtube_url=project_data.url,
+        youtube_url=url,  # Store original URL regardless of source
         youtube_id=video_id,
         title=video_info.get('title'),
         duration=video_info.get('duration'),
@@ -441,7 +529,6 @@ async def upload_video(
     # Get video duration using ffprobe
     duration = None
     try:
-        import subprocess
         result = subprocess.run(
             ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
              '-of', 'default=noprint_wrappers=1:nokey=1', str(output_path)],
@@ -547,15 +634,55 @@ async def get_project(project_id: int, db: Session = Depends(get_db)):
 
 @router.delete("/projects/{project_id}")
 async def delete_project(project_id: int, db: Session = Depends(get_db)):
-    """Delete a project and all its clips"""
+    """Delete a project and all its clips, including files on disk"""
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    # Check if project is being processed
+    if project.is_processing:
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot delete project while it's being processed. Please wait for processing to complete."
+        )
+
+    # Delete associated files
+    files_to_delete = []
+
+    # Video and audio files
+    if project.video_path:
+        files_to_delete.append(project.video_path)
+    if project.audio_path:
+        files_to_delete.append(project.audio_path)
+
+    # Clip files
+    for clip in project.clips:
+        if clip.video_path:
+            files_to_delete.append(clip.video_path)
+        if clip.video_path_with_subtitles:
+            files_to_delete.append(clip.video_path_with_subtitles)
+        if clip.subtitle_path:
+            files_to_delete.append(clip.subtitle_path)
+
+    # Delete files (ignore errors)
+    deleted_files = 0
+    for file_path in files_to_delete:
+        try:
+            path = Path(file_path)
+            if path.exists():
+                path.unlink()
+                deleted_files += 1
+        except Exception as e:
+            print(f"⚠️ Could not delete file {file_path}: {e}")
+
+    # Delete from database (cascade will delete clips)
     db.delete(project)
     db.commit()
 
-    return {"message": "Project deleted successfully"}
+    return {
+        "message": "Project deleted successfully",
+        "files_deleted": deleted_files
+    }
 
 
 @router.get("/projects/{project_id}/status", response_model=ProcessingStatus)
@@ -608,11 +735,16 @@ async def reprocess_project(
     Reprocess a project that failed or needs to be regenerated.
     Only projects with 'error' or 'completed' status can be reprocessed.
     """
-    from datetime import datetime
-
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    # Check if project is already being processed
+    if project.is_processing:
+        raise HTTPException(
+            status_code=409,
+            detail="Project is already being processed. Please wait for processing to complete."
+        )
 
     # Only allow reprocessing for error or completed status
     if project.status not in [ProjectStatus.ERROR.value, ProjectStatus.COMPLETED.value]:
@@ -774,6 +906,13 @@ async def export_clip_format(
     clip = db.query(Clip).filter(Clip.id == clip_id).first()
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
+
+    # Validate timestamps
+    if clip.start_time >= clip.end_time:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid clip timestamps: start_time ({clip.start_time}) must be less than end_time ({clip.end_time})"
+        )
 
     # Validate format
     format_id = export_request.format_id

@@ -7,6 +7,7 @@ from .analyzer import ClipAnalyzer
 from .cutter import VideoCutter
 from .subtitler import SubtitleGenerator
 from .reframer import AIReframer
+from .auth import AuthService
 
 __all__ = [
     "YouTubeDownloader",
@@ -14,5 +15,6 @@ __all__ = [
     "ClipAnalyzer",
     "VideoCutter",
     "SubtitleGenerator",
-    "AIReframer"
+    "AIReframer",
+    "AuthService",
 ]

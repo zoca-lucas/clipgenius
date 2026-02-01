@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Image from 'next/image';
 import Link from 'next/link';
@@ -37,6 +37,7 @@ export default function ProjectPage() {
   const [status, setStatus] = useState<ProcessingStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const loadProject = useCallback(async () => {
     try {
@@ -63,11 +64,23 @@ export default function ProjectPage() {
 
   // Poll for status updates while processing
   useEffect(() => {
-    if (project && !['completed', 'error'].includes(project.status)) {
-      const interval = setInterval(loadProject, 3000);
-      return () => clearInterval(interval);
+    // Clear any existing interval first
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
     }
-  }, [project, loadProject]);
+
+    if (project && !['completed', 'error'].includes(project.status)) {
+      pollingIntervalRef.current = setInterval(loadProject, 3000);
+    }
+
+    return () => {
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+    };
+  }, [project?.status, loadProject]);
 
   const handleDeleteProject = async () => {
     if (!confirm('Tem certeza que deseja deletar este projeto e todos os cortes?')) {
@@ -78,7 +91,8 @@ export default function ProjectPage() {
       await deleteProject(projectId);
       router.push('/');
     } catch (err) {
-      setError('Erro ao deletar projeto');
+      const message = err instanceof Error ? err.message : 'Erro ao deletar projeto';
+      setError(message);
     }
   };
 
@@ -211,8 +225,13 @@ export default function ProjectPage() {
                   </button>
                   <button
                     onClick={handleDeleteProject}
-                    className="p-2 bg-red-500/20 hover:bg-red-500/30 rounded-lg text-red-400 transition-colors"
-                    title="Deletar projeto"
+                    disabled={isProcessing}
+                    className={`p-2 rounded-lg transition-colors ${
+                      isProcessing
+                        ? 'bg-gray-500/20 text-gray-500 cursor-not-allowed'
+                        : 'bg-red-500/20 hover:bg-red-500/30 text-red-400'
+                    }`}
+                    title={isProcessing ? 'Aguarde o processamento terminar' : 'Deletar projeto'}
                   >
                     <Trash2 className="w-5 h-5" />
                   </button>

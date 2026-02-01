@@ -8,8 +8,12 @@ import {
   RectangleVertical,
   Download,
   Loader2,
-  Check
+  Check,
+  AlertCircle
 } from 'lucide-react';
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
+const BASE_URL = API_BASE_URL.replace('/api', '');
 
 interface OutputFormat {
   id: string;
@@ -71,12 +75,14 @@ export default function FormatSelector({ clipId, onExport }: FormatSelectorProps
   const [selectedFormat, setSelectedFormat] = useState<string>('vertical');
   const [exporting, setExporting] = useState<string | null>(null);
   const [exported, setExported] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   const handleExport = async (formatId: string) => {
     setExporting(formatId);
+    setError(null);
 
     try {
-      const response = await fetch(`http://localhost:8000/api/clips/${clipId}/export`, {
+      const response = await fetch(`${API_BASE_URL}/clips/${clipId}/export`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -85,7 +91,8 @@ export default function FormatSelector({ clipId, onExport }: FormatSelectorProps
       });
 
       if (!response.ok) {
-        throw new Error('Export failed');
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Export failed');
       }
 
       const data = await response.json();
@@ -98,10 +105,12 @@ export default function FormatSelector({ clipId, onExport }: FormatSelectorProps
       // Download the exported file
       if (data.video_path) {
         const filename = data.video_path.split('/').pop();
-        window.open(`http://localhost:8000/clips/${filename}`, '_blank');
+        window.open(`${BASE_URL}/clips/${filename}`, '_blank');
       }
-    } catch (error) {
-      console.error('Export error:', error);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Erro ao exportar';
+      setError(message);
+      console.error('Export error:', err);
     } finally {
       setExporting(null);
     }
@@ -153,6 +162,13 @@ export default function FormatSelector({ clipId, onExport }: FormatSelectorProps
           );
         })}
       </div>
+
+      {error && (
+        <div className="mt-3 flex items-center gap-2 text-xs text-red-400 bg-red-500/10 p-2 rounded-lg">
+          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
 
       <p className="text-[10px] text-gray-600 mt-3 text-center">
         Clique para exportar e baixar

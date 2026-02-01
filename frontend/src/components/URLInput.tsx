@@ -55,7 +55,9 @@ export default function URLInput() {
       setUploadProgress(0);
 
       try {
-        const project = await uploadVideo(selectedFile);
+        const project = await uploadVideo(selectedFile, (progress) => {
+          setUploadProgress(progress);
+        });
         router.push(`/projects/${project.id}`);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Erro ao fazer upload');
@@ -196,23 +198,33 @@ export default function URLInput() {
             </div>
 
             {selectedFile && (
-              <button
-                type="submit"
-                disabled={isLoading}
-                className="w-full py-4 bg-primary hover:bg-primary/80 disabled:bg-primary/50 text-white font-medium rounded-xl flex items-center justify-center gap-2 transition-colors"
-              >
-                {isLoading ? (
-                  <>
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                    Enviando... {uploadProgress > 0 && `${uploadProgress}%`}
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="w-5 h-5" />
-                    Gerar Cortes
-                  </>
+              <div className="space-y-2">
+                <button
+                  type="submit"
+                  disabled={isLoading}
+                  className="w-full py-4 bg-primary hover:bg-primary/80 disabled:bg-primary/50 text-white font-medium rounded-xl flex items-center justify-center gap-2 transition-colors"
+                >
+                  {isLoading ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                      {uploadProgress < 100 ? `Enviando... ${uploadProgress}%` : 'Processando...'}
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-5 h-5" />
+                      Gerar Cortes
+                    </>
+                  )}
+                </button>
+                {isLoading && uploadProgress > 0 && uploadProgress < 100 && (
+                  <div className="w-full bg-dark-600 rounded-full h-2">
+                    <div
+                      className="bg-primary h-2 rounded-full transition-all duration-300"
+                      style={{ width: `${uploadProgress}%` }}
+                    />
+                  </div>
                 )}
-              </button>
+              </div>
             )}
           </div>
         )}

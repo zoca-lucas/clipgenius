@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Play, Download, Trash2, Clock, Star, MoreHorizontal, X } from 'lucide-react';
+import { Play, Download, Trash2, Clock, Star, MoreHorizontal, X, Loader2 } from 'lucide-react';
 import { Clip, formatDuration, getScoreColor, getClipDownloadUrl, getClipVideoUrl } from '@/lib/api';
 import FormatSelector from './FormatSelector';
 
@@ -13,15 +13,21 @@ interface ClipCardProps {
 export default function ClipCard({ clip, onDelete }: ClipCardProps) {
   const [showVideo, setShowVideo] = useState(false);
   const [showFormats, setShowFormats] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const handleDownload = () => {
     const url = getClipDownloadUrl(clip.id, true);
     window.open(url, '_blank');
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (confirm('Tem certeza que deseja deletar este corte?')) {
-      onDelete?.(clip.id);
+      setIsDeleting(true);
+      try {
+        await onDelete?.(clip.id);
+      } finally {
+        setIsDeleting(false);
+      }
     }
   };
 
@@ -97,9 +103,18 @@ export default function ClipCard({ clip, onDelete }: ClipCardProps) {
           </button>
           <button
             onClick={handleDelete}
-            className="px-3 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors"
+            disabled={isDeleting}
+            className={`px-3 py-2 rounded-lg transition-colors ${
+              isDeleting
+                ? 'bg-gray-500/20 text-gray-500 cursor-wait'
+                : 'bg-red-500/20 hover:bg-red-500/30 text-red-400'
+            }`}
           >
-            <Trash2 className="w-4 h-4" />
+            {isDeleting ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Trash2 className="w-4 h-4" />
+            )}
           </button>
         </div>
 

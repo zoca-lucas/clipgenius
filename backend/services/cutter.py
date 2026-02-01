@@ -37,6 +37,10 @@ class VideoCutter:
 
     def get_video_dimensions(self, video_path: str) -> Tuple[int, int]:
         """Get video width and height using ffprobe"""
+        video_file = Path(video_path)
+        if not video_file.exists():
+            raise FileNotFoundError(f"Vídeo não encontrado: {video_path}")
+
         cmd = [
             'ffprobe',
             '-v', 'error',
@@ -46,8 +50,28 @@ class VideoCutter:
             str(video_path)
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        width, height = map(int, result.stdout.strip().split(','))
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
+        except subprocess.CalledProcessError as e:
+            error_msg = e.stderr if e.stderr else str(e)
+            raise RuntimeError(f"Erro ao obter dimensões do vídeo: {error_msg}")
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"Timeout ao obter dimensões do vídeo: {video_path}")
+        except FileNotFoundError:
+            raise RuntimeError("ffprobe não encontrado. Instale o FFmpeg.")
+
+        output = result.stdout.strip()
+        if not output or ',' not in output:
+            raise RuntimeError(f"Saída inválida do ffprobe: {output}")
+
+        try:
+            width, height = map(int, output.split(','))
+        except ValueError:
+            raise RuntimeError(f"Não foi possível parsear dimensões: {output}")
+
+        if width <= 0 or height <= 0:
+            raise RuntimeError(f"Dimensões inválidas: {width}x{height}")
+
         return width, height
 
     def calculate_crop(
@@ -202,8 +226,20 @@ class VideoCutter:
         try:
             subprocess.run(cmd, check=True, capture_output=True)
         except subprocess.CalledProcessError as e:
-            print(f"FFmpeg error: {e.stderr.decode()}")
-            raise
+            # Clean up partial file on failure
+            if output_path.exists():
+                try:
+                    output_path.unlink()
+                    print(f"Cleaned up partial file: {output_path}")
+                except Exception:
+                    pass
+            error_msg = e.stderr.decode() if e.stderr else str(e)
+            print(f"FFmpeg error: {error_msg}")
+            raise RuntimeError(f"Failed to cut clip: {error_msg}")
+
+        # Verify output file was created
+        if not output_path.exists():
+            raise RuntimeError(f"FFmpeg completed but output file not found: {output_path}")
 
         return {
             'video_path': str(output_path),
@@ -283,7 +319,18 @@ class VideoCutter:
 
         print(f"Fast cutting clip: {start_time:.1f}s - {end_time:.1f}s")
 
-        subprocess.run(cmd, check=True, capture_output=True)
+        try:
+            subprocess.run(cmd, check=True, capture_output=True)
+        except subprocess.CalledProcessError as e:
+            # Clean up partial file on failure
+            if output_path.exists():
+                try:
+                    output_path.unlink()
+                except Exception:
+                    pass
+            error_msg = e.stderr.decode() if e.stderr else str(e)
+            print(f"FFmpeg fast cut error: {error_msg}")
+            raise RuntimeError(f"Failed to fast cut clip: {error_msg}")
 
         return {
             'video_path': str(output_path),

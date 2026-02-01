@@ -1,8 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import { Play, Download, Trash2, Clock, Star } from 'lucide-react';
+import { Play, Download, Trash2, Clock, Star, MoreHorizontal, X } from 'lucide-react';
 import { Clip, formatDuration, getScoreColor, getClipDownloadUrl, getClipVideoUrl } from '@/lib/api';
+import FormatSelector from './FormatSelector';
 
 interface ClipCardProps {
   clip: Clip;
@@ -10,8 +11,8 @@ interface ClipCardProps {
 }
 
 export default function ClipCard({ clip, onDelete }: ClipCardProps) {
-  const [isPlaying, setIsPlaying] = useState(false);
   const [showVideo, setShowVideo] = useState(false);
+  const [showFormats, setShowFormats] = useState(false);
 
   const handleDownload = () => {
     const url = getClipDownloadUrl(clip.id, true);
@@ -36,7 +37,6 @@ export default function ClipCard({ clip, onDelete }: ClipCardProps) {
             className="w-full h-full object-cover"
             controls
             autoPlay
-            onEnded={() => setIsPlaying(false)}
           />
         ) : (
           <div
@@ -89,12 +89,26 @@ export default function ClipCard({ clip, onDelete }: ClipCardProps) {
             Baixar
           </button>
           <button
+            onClick={() => setShowFormats(!showFormats)}
+            className="px-3 py-2 bg-dark-600 hover:bg-dark-500 text-gray-400 hover:text-white rounded-lg transition-colors"
+            title="Mais formatos"
+          >
+            <MoreHorizontal className="w-4 h-4" />
+          </button>
+          <button
             onClick={handleDelete}
             className="px-3 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors"
           >
             <Trash2 className="w-4 h-4" />
           </button>
         </div>
+
+        {/* Format Selector */}
+        {showFormats && (
+          <div className="mt-3">
+            <FormatSelector clipId={clip.id} />
+          </div>
+        )}
       </div>
     </div>
   );

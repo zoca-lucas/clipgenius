@@ -53,7 +53,46 @@ NUM_CLIPS_TO_GENERATE = 15  # Igual ao Real Oficial
 # FFmpeg settings
 VIDEO_FORMAT = "mp4"
 AUDIO_FORMAT = "wav"
-OUTPUT_ASPECT_RATIO = "9:16"  # Vertical for shorts/reels
+OUTPUT_ASPECT_RATIO = "9:16"  # Vertical for shorts/reels (default)
+
+# Output format presets
+# Each format defines: aspect ratio, resolution, and platform info
+OUTPUT_FORMATS = {
+    "vertical": {
+        "id": "vertical",
+        "name": "Vertical (9:16)",
+        "aspect_ratio": "9:16",
+        "resolution": (1080, 1920),
+        "platforms": ["TikTok", "Instagram Reels", "YouTube Shorts"],
+        "description": "Formato vertical para shorts e reels"
+    },
+    "square": {
+        "id": "square",
+        "name": "Quadrado (1:1)",
+        "aspect_ratio": "1:1",
+        "resolution": (1080, 1080),
+        "platforms": ["Instagram Feed", "Facebook", "Twitter"],
+        "description": "Formato quadrado para feed"
+    },
+    "landscape": {
+        "id": "landscape",
+        "name": "Horizontal (16:9)",
+        "aspect_ratio": "16:9",
+        "resolution": (1920, 1080),
+        "platforms": ["YouTube", "LinkedIn", "Website"],
+        "description": "Formato horizontal tradicional"
+    },
+    "portrait": {
+        "id": "portrait",
+        "name": "Retrato (4:5)",
+        "aspect_ratio": "4:5",
+        "resolution": (1080, 1350),
+        "platforms": ["Instagram Post", "Facebook Post"],
+        "description": "Formato retrato para posts"
+    }
+}
+
+DEFAULT_OUTPUT_FORMAT = "vertical"
 
 # Upload settings
 MAX_UPLOAD_SIZE = int(os.getenv("MAX_UPLOAD_SIZE", str(500 * 1024 * 1024)))  # 500MB default

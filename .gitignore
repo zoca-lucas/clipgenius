@@ -58,3 +58,4 @@ htmlcov/
 # Model cache (downloaded at runtime)
 models_cache/
 *.tflite
+frontend/tsconfig.tsbuildinfo

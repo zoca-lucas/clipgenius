@@ -19,7 +19,9 @@ from config import (
     ENABLE_AI_REFRAME,
     REFRAME_SAMPLE_INTERVAL,
     REFRAME_DYNAMIC_MODE,
-    NUM_CLIPS_TO_GENERATE
+    NUM_CLIPS_TO_GENERATE,
+    OUTPUT_FORMATS,
+    DEFAULT_OUTPUT_FORMAT
 )
 
 from models import get_db, Project, Clip, SessionLocal
@@ -40,7 +42,10 @@ from .schemas import (
     ClipResponse,
     ClipListResponse,
     ClipRegenerate,
-    ProcessingStatus
+    ProcessingStatus,
+    OutputFormat,
+    OutputFormatsResponse,
+    ClipExportRequest
 )
 
 router = APIRouter()
@@ -731,3 +736,80 @@ async def delete_clip(clip_id: int, db: Session = Depends(get_db)):
     db.commit()
 
     return {"message": "Clip deleted successfully"}
+
+
+# ============ Output Format Endpoints ============
+
+@router.get("/formats", response_model=OutputFormatsResponse)
+async def list_output_formats():
+    """List all available output formats"""
+    formats = [
+        OutputFormat(
+            id=fmt["id"],
+            name=fmt["name"],
+            aspect_ratio=fmt["aspect_ratio"],
+            resolution=fmt["resolution"],
+            platforms=fmt["platforms"],
+            description=fmt["description"]
+        )
+        for fmt in OUTPUT_FORMATS.values()
+    ]
+
+    return OutputFormatsResponse(
+        formats=formats,
+        default=DEFAULT_OUTPUT_FORMAT
+    )
+
+
+@router.post("/clips/{clip_id}/export")
+async def export_clip_format(
+    clip_id: int,
+    export_request: ClipExportRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Export a clip in a different format.
+    Creates a new video file with the specified aspect ratio.
+    """
+    clip = db.query(Clip).filter(Clip.id == clip_id).first()
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    # Validate format
+    format_id = export_request.format_id
+    if format_id not in OUTPUT_FORMATS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid format. Available: {', '.join(OUTPUT_FORMATS.keys())}"
+        )
+
+    # Get project to access original video
+    project = clip.project
+    if not project or not project.video_path:
+        raise HTTPException(status_code=404, detail="Original video not found")
+
+    # Generate new clip in requested format
+    output_name = f"{project.youtube_id}_clip_{clip.id:02d}_{format_id}"
+
+    try:
+        result = cutter.cut_clip(
+            video_path=project.video_path,
+            start_time=clip.start_time,
+            end_time=clip.end_time,
+            output_name=output_name,
+            output_format=format_id
+        )
+
+        # Return download URL
+        fmt = OUTPUT_FORMATS[format_id]
+        return {
+            "message": f"Clip exported in {fmt['name']} format",
+            "format": format_id,
+            "resolution": fmt["resolution"],
+            "platforms": fmt["platforms"],
+            "video_path": result["video_path"],
+            "download_url": f"/clips/export/{Path(result['video_path']).name}"
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")

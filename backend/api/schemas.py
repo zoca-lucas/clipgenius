@@ -89,3 +89,26 @@ class ClipListResponse(BaseModel):
     """Schema for clip list"""
     items: List[ClipResponse]
     total: int
+
+
+# ============ Output Format Schemas ============
+
+class OutputFormat(BaseModel):
+    """Schema for output format"""
+    id: str
+    name: str
+    aspect_ratio: str
+    resolution: tuple
+    platforms: List[str]
+    description: str
+
+
+class OutputFormatsResponse(BaseModel):
+    """Schema for list of available output formats"""
+    formats: List[OutputFormat]
+    default: str
+
+
+class ClipExportRequest(BaseModel):
+    """Schema for exporting a clip in different format"""
+    format_id: str = Field(..., description="Output format ID (vertical, square, landscape, portrait)")

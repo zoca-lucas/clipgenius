@@ -1,0 +1,255 @@
+"""
+ClipGenius - AI Clip Analyzer Service
+Uses Ollama (local LLM) to analyze transcription and suggest viral clips
+FREE - No API costs! Runs 100% locally.
+"""
+import json
+import re
+import httpx
+from typing import Dict, Any, List
+from config import (
+    NUM_CLIPS_TO_GENERATE,
+    CLIP_MIN_DURATION,
+    CLIP_MAX_DURATION,
+    OLLAMA_BASE_URL,
+    OLLAMA_MODEL
+)
+
+
+class ClipAnalyzer:
+    """Service to analyze transcription and suggest viral clips using Ollama (FREE)"""
+
+    ANALYSIS_PROMPT = """Você é um especialista em conteúdo viral para redes sociais (TikTok, Reels, Shorts).
+
+Analise a transcrição abaixo de um vídeo do YouTube e identifique os {num_clips} MELHORES momentos para criar cortes virais.
+
+REGRAS IMPORTANTES:
+1. Cada corte deve ter entre {min_duration} e {max_duration} segundos
+2. O corte deve começar com um GANCHO forte (frase que prende atenção)
+3. O corte deve ter uma ideia COMPLETA (não cortar no meio de um raciocínio)
+4. Priorize momentos com: emoção, polêmica, humor, insights únicos, frases de impacto
+5. Os cortes NÃO devem se sobrepor (timestamps únicos)
+6. Ordene do MELHOR para o pior (maior nota primeiro)
+
+CRITÉRIOS DE AVALIAÇÃO (nota de 0 a 10):
+- Gancho inicial forte (0-2 pts): A primeira frase prende atenção?
+- Conteúdo emocional/polêmico (0-2 pts): Gera reação emocional?
+- Frase de impacto/citável (0-2 pts): Tem frases que as pessoas vão querer compartilhar?
+- Completude da ideia (0-2 pts): O pensamento está completo?
+- Potencial de compartilhamento (0-2 pts): As pessoas vão querer enviar para amigos?
+
+TRANSCRIÇÃO COM TIMESTAMPS:
+{transcription}
+
+IMPORTANTE: Responda APENAS com JSON válido, sem texto adicional antes ou depois. Use este formato EXATO:
+
+{{"clips": [{{"timestamp_inicio": "MM:SS", "timestamp_fim": "MM:SS", "titulo": "Título curto", "nota_viral": 8.5, "justificativa": "Por que é viral", "gancho": "Primeira frase"}}]}}
+
+Retorne EXATAMENTE {num_clips} cortes."""
+
+    def __init__(self, model: str = None, base_url: str = None):
+        self.model = model or OLLAMA_MODEL
+        self.base_url = base_url or OLLAMA_BASE_URL
+        self._verify_ollama()
+
+    def _verify_ollama(self):
+        """Verify Ollama is running and model is available"""
+        try:
+            response = httpx.get(f"{self.base_url}/api/tags", timeout=5)
+            if response.status_code != 200:
+                raise ConnectionError("Ollama não está respondendo")
+
+            models = response.json().get("models", [])
+            model_names = [m.get("name", "").split(":")[0] for m in models]
+
+            if self.model not in model_names and f"{self.model}:latest" not in [m.get("name") for m in models]:
+                available = ", ".join(model_names) if model_names else "nenhum"
+                print(f"⚠️  Modelo '{self.model}' não encontrado.")
+                print(f"   Modelos disponíveis: {available}")
+                print(f"   Execute: ollama pull {self.model}")
+
+        except httpx.ConnectError:
+            raise ConnectionError(
+                "\n❌ Ollama não está rodando!\n"
+                "   \n"
+                "   Para instalar e iniciar:\n"
+                "   1. Instale: https://ollama.ai\n"
+                "   2. Execute: ollama serve\n"
+                "   3. Baixe um modelo: ollama pull llama3.2\n"
+            )
+
+    def _format_transcription_for_prompt(self, transcription: Dict[str, Any]) -> str:
+        """Format transcription with timestamps for the prompt"""
+        lines = []
+
+        for segment in transcription.get('segments', []):
+            start = segment.get('start', 0)
+            text = segment.get('text', '')
+
+            # Format timestamp as MM:SS
+            minutes = int(start // 60)
+            seconds = int(start % 60)
+            timestamp = f"[{minutes:02d}:{seconds:02d}]"
+
+            lines.append(f"{timestamp} {text}")
+
+        return '\n'.join(lines)
+
+    def _parse_timestamp(self, timestamp: str) -> float:
+        """Convert MM:SS to seconds"""
+        try:
+            parts = timestamp.replace('[', '').replace(']', '').split(':')
+            if len(parts) == 2:
+                return int(parts[0]) * 60 + int(parts[1])
+            elif len(parts) == 3:
+                return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+            return 0
+        except (ValueError, IndexError):
+            return 0
+
+    def _call_ollama(self, prompt: str) -> str:
+        """Call Ollama API"""
+        print(f"🤖 Chamando Ollama ({self.model})...")
+
+        response = httpx.post(
+            f"{self.base_url}/api/generate",
+            json={
+                "model": self.model,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": 0.7,
+                    "num_predict": 4096,
+                }
+            },
+            timeout=httpx.Timeout(600.0, connect=30.0)  # 10 minutes read timeout
+        )
+
+        if response.status_code != 200:
+            raise Exception(f"Ollama error: {response.text}")
+
+        return response.json().get("response", "")
+
+    def _try_fix_json(self, text: str) -> Dict:
+        """Try to fix common JSON parsing issues from LLM output"""
+        # Try to extract just the clips array
+        clips_match = re.search(r'\[.*\]', text, re.DOTALL)
+        if clips_match:
+            try:
+                clips = json.loads(clips_match.group())
+                return {"clips": clips}
+            except:
+                pass
+
+        # Try to find individual clip objects
+        clip_pattern = r'\{[^{}]*"timestamp_inicio"[^{}]*\}'
+        matches = re.findall(clip_pattern, text)
+        if matches:
+            clips = []
+            for match in matches:
+                try:
+                    clip = json.loads(match)
+                    clips.append(clip)
+                except:
+                    continue
+            if clips:
+                return {"clips": clips}
+
+        # Return empty result
+        print("❌ Não foi possível extrair JSON válido da resposta")
+        return {"clips": []}
+
+    def analyze(
+        self,
+        transcription: Dict[str, Any],
+        num_clips: int = None,
+        min_duration: int = None,
+        max_duration: int = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Analyze transcription and return suggested clips
+
+        Args:
+            transcription: Transcription dict with segments
+            num_clips: Number of clips to generate
+            min_duration: Minimum clip duration in seconds
+            max_duration: Maximum clip duration in seconds
+
+        Returns:
+            List of clip suggestions with timestamps and scores
+        """
+        num_clips = num_clips or NUM_CLIPS_TO_GENERATE
+        min_duration = min_duration or CLIP_MIN_DURATION
+        max_duration = max_duration or CLIP_MAX_DURATION
+
+        # Format transcription for prompt
+        formatted_transcription = self._format_transcription_for_prompt(transcription)
+
+        # Build prompt
+        prompt = self.ANALYSIS_PROMPT.format(
+            num_clips=num_clips,
+            min_duration=min_duration,
+            max_duration=max_duration,
+            transcription=formatted_transcription
+        )
+
+        print(f"📊 Analisando transcrição com Ollama... (solicitando {num_clips} cortes)")
+
+        # Call Ollama
+        response_text = self._call_ollama(prompt)
+
+        # Parse JSON from response
+        try:
+            # Try to find JSON in the response
+            json_start = response_text.find('{')
+            json_end = response_text.rfind('}') + 1
+
+            if json_start >= 0 and json_end > json_start:
+                json_str = response_text[json_start:json_end]
+                result = json.loads(json_str)
+            else:
+                raise ValueError("No JSON found in response")
+
+        except json.JSONDecodeError as e:
+            print(f"⚠️  Erro ao parsear JSON: {e}")
+            print(f"   Tentando recuperar...")
+            result = self._try_fix_json(response_text)
+
+        # Process clips
+        clips = []
+        for clip_data in result.get('clips', []):
+            start_seconds = self._parse_timestamp(clip_data.get('timestamp_inicio', '00:00'))
+            end_seconds = self._parse_timestamp(clip_data.get('timestamp_fim', '00:00'))
+
+            # Validate clip duration
+            duration = end_seconds - start_seconds
+            if duration < 10:  # Skip invalid clips
+                continue
+
+            clips.append({
+                'start_time': start_seconds,
+                'end_time': end_seconds,
+                'duration': duration,
+                'title': clip_data.get('titulo', 'Sem título'),
+                'viral_score': float(clip_data.get('nota_viral', 5)),
+                'justification': clip_data.get('justificativa', ''),
+                'hook': clip_data.get('gancho', '')
+            })
+
+        # Sort by viral score (highest first)
+        clips.sort(key=lambda x: x['viral_score'], reverse=True)
+
+        print(f"✅ Gerados {len(clips)} cortes sugeridos")
+        return clips
+
+
+# Quick test
+if __name__ == "__main__":
+    print("🧪 Testando conexão com Ollama...")
+    try:
+        analyzer = ClipAnalyzer()
+        print("✅ Analyzer inicializado com sucesso!")
+        print(f"   Modelo: {analyzer.model}")
+        print(f"   URL: {analyzer.base_url}")
+    except ConnectionError as e:
+        print(e)

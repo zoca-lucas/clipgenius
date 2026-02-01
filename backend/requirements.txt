@@ -1,0 +1,13 @@
+# ClipGenius - Backend Dependencies
+# 100% FREE - Uses Ollama for AI (local)
+fastapi
+uvicorn[standard]
+python-multipart
+yt-dlp
+openai-whisper
+ffmpeg-python
+sqlalchemy
+pydantic
+python-dotenv
+aiosqlite
+httpx

@@ -79,6 +79,24 @@ if AI_PROVIDER not in VALID_AI_PROVIDERS:
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")  # tiny, base, small, medium, large
 WHISPER_LANGUAGE = os.getenv("WHISPER_LANGUAGE", "pt")  # Portuguese by default
 
+# Transcription backend: deepgram, assemblyai, whisperx, stable-ts, faster-whisper, groq, auto
+# deepgram = best quality cloud API (recommended)
+# assemblyai = high quality cloud API
+# whisperx = best local accuracy (forced alignment with wav2vec2)
+# stable-ts = stable timestamps (local)
+# faster-whisper = fast with native timestamps (local)
+# groq = cloud API (fast but less precise)
+# auto = automatically select best available
+TRANSCRIPTION_BACKEND = os.getenv("TRANSCRIPTION_BACKEND", "auto")
+
+# Deepgram API (HIGH QUALITY - recommended for production)
+# Sign up at https://deepgram.com - generous free tier
+DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
+
+# AssemblyAI API (HIGH QUALITY alternative)
+# Sign up at https://assemblyai.com - free tier available
+ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY", "")
+
 # Supported languages for transcription
 SUPPORTED_LANGUAGES = {
     "pt": "Portuguese",
@@ -103,9 +121,19 @@ DOWNLOAD_RETRY_DELAY = _safe_int(os.getenv("DOWNLOAD_RETRY_DELAY", "5"), 5, "DOW
 
 # Video settings
 MAX_VIDEO_DURATION = 3600 * 3  # 3 hours max
-CLIP_MIN_DURATION = 15  # 15 seconds min (duração ideal para TikTok viral)
-CLIP_MAX_DURATION = 60  # 60 seconds max
+CLIP_MIN_DURATION = 15  # 15 seconds min (garante conteúdo substancial)
+CLIP_MAX_DURATION = 60  # 60 seconds max (permite completar ideias longas)
+CLIP_IDEAL_DURATION = 30  # 30 seconds ideal (conteúdo completo + retenção)
 NUM_CLIPS_TO_GENERATE = 15  # Igual ao Real Oficial
+
+# IMPORTANTE: É melhor ter um clip de 45s com conteúdo COMPLETO
+# do que um de 25s que corta no meio de uma explicação
+
+# Sentence Boundary Detection settings
+# Ajusta timestamps de clips para terminar em finais naturais de sentença
+SENTENCE_DETECTION_ENABLED = os.getenv("SENTENCE_DETECTION_ENABLED", "true").lower() == "true"
+SENTENCE_MIN_PAUSE = _safe_float(os.getenv("SENTENCE_MIN_PAUSE", "0.5"), 0.5, "SENTENCE_MIN_PAUSE", 0.1, 2.0)  # Segundos - pausa mínima para considerar fim de frase
+SENTENCE_MAX_EXTENSION = _safe_float(os.getenv("SENTENCE_MAX_EXTENSION", "8"), 8, "SENTENCE_MAX_EXTENSION", 1, 15)  # Segundos - máximo para estender um clip
 
 # FFmpeg settings
 VIDEO_FORMAT = "mp4"
@@ -167,8 +195,18 @@ ENABLE_AI_REFRAME = os.getenv("ENABLE_AI_REFRAME", "true").lower() == "true"
 REFRAME_SAMPLE_INTERVAL = _safe_float(os.getenv("REFRAME_SAMPLE_INTERVAL", "0.5"), 0.5, "REFRAME_SAMPLE_INTERVAL", 0.1, 5.0)
 REFRAME_DYNAMIC_MODE = os.getenv("REFRAME_DYNAMIC_MODE", "false").lower() == "true"  # Frame-by-frame (slower)
 
+# Subtitle Style Settings
+# Style types: "default" (simple text), "karaoke" (word highlight), "hormozi" (viral style - RECOMMENDED)
+# hormozi = Alex Hormozi style - UPPERCASE, colorful, impactful
+SUBTITLE_STYLE_TYPE = os.getenv("SUBTITLE_STYLE_TYPE", "hormozi")
+
 # Karaoke Subtitle Settings - TikTok/Reels style word-by-word highlighting
-SUBTITLE_KARAOKE_ENABLED = os.getenv("SUBTITLE_KARAOKE_ENABLED", "true").lower() == "true"
+# Only used when SUBTITLE_STYLE_TYPE is "karaoke"
+SUBTITLE_KARAOKE_ENABLED = os.getenv("SUBTITLE_KARAOKE_ENABLED", "false").lower() == "true"
+
+# Words per line settings
+# For Hormozi style, fewer words per line is better (more impactful)
+SUBTITLE_MAX_WORDS_PER_LINE = int(os.getenv("SUBTITLE_MAX_WORDS_PER_LINE", "4"))
 SUBTITLE_HIGHLIGHT_COLOR = os.getenv("SUBTITLE_HIGHLIGHT_COLOR", "&H00FFFF&")  # Yellow (BGR format)
 SUBTITLE_INACTIVE_COLOR = os.getenv("SUBTITLE_INACTIVE_COLOR", "&HFFFFFF&")  # White
 SUBTITLE_SCALE_EFFECT = os.getenv("SUBTITLE_SCALE_EFFECT", "true").lower() == "true"
@@ -183,6 +221,14 @@ SUBTITLE_FONT_BOLD = os.getenv("SUBTITLE_FONT_BOLD", "true").lower() == "true"
 SUBTITLE_OUTLINE_SIZE = _safe_int(os.getenv("SUBTITLE_OUTLINE_SIZE", "4"), 4, "SUBTITLE_OUTLINE_SIZE")
 SUBTITLE_SHADOW_SIZE = _safe_int(os.getenv("SUBTITLE_SHADOW_SIZE", "2"), 2, "SUBTITLE_SHADOW_SIZE")
 SUBTITLE_MARGIN_V = _safe_int(os.getenv("SUBTITLE_MARGIN_V", "120"), 120, "SUBTITLE_MARGIN_V")  # Vertical margin from bottom
+
+# Subtitle Position Settings
+# Position: "top", "middle", "bottom" (default: bottom)
+SUBTITLE_POSITION = os.getenv("SUBTITLE_POSITION", "bottom")
+# Vertical offset: percentage from the position (0-100)
+# For bottom: 0 = very bottom, 50 = middle-bottom
+# For top: 0 = very top, 50 = middle-top
+SUBTITLE_VERTICAL_OFFSET = _safe_int(os.getenv("SUBTITLE_VERTICAL_OFFSET", "10"), 10, "SUBTITLE_VERTICAL_OFFSET")
 
 # JWT Authentication settings
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-super-secret-key-change-in-production-at-least-32-chars")

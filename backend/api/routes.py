@@ -29,7 +29,11 @@ from config import (
     OUTPUT_FORMATS,
     DEFAULT_OUTPUT_FORMAT,
     SUPPORTED_LANGUAGES,
-    DEFAULT_LANGUAGE
+    DEFAULT_LANGUAGE,
+    CLIP_MAX_DURATION,
+    SENTENCE_DETECTION_ENABLED,
+    SENTENCE_MIN_PAUSE,
+    SENTENCE_MAX_EXTENSION
 )
 from logging_config import get_api_logger, get_background_logger
 
@@ -40,11 +44,14 @@ from models import get_db, Project, Clip, get_background_session, db_lock
 from models.project import ProjectStatus
 from services import (
     YouTubeDownloader,
-    WhisperTranscriber,
     ClipAnalyzer,
     VideoCutter,
-    SubtitleGenerator,
-    AIReframer
+    AIReframer,
+    # V2 - Versões melhoradas com timestamps precisos
+    TranscriberV2,
+    SubtitleGeneratorV2,
+    # Sentence Boundary Detection
+    SentenceBoundaryDetector
 )
 from .schemas import (
     ProjectCreate,
@@ -64,9 +71,9 @@ router = APIRouter()
 
 # Initialize services
 downloader = YouTubeDownloader()
-transcriber = WhisperTranscriber()
+transcriber = TranscriberV2(backend="auto")  # V2: auto seleciona melhor backend
 cutter = VideoCutter()
-subtitler = SubtitleGenerator()
+subtitler = SubtitleGeneratorV2()  # V2: tamanho consistente e melhor sincronização
 reframer = AIReframer()
 
 
@@ -266,6 +273,49 @@ def process_video(project_id: int, language: str = None):
 
         analyzer = get_analyzer()
         clip_suggestions = analyzer.analyze(transcription)
+
+        # Ajustar timestamps para limites de sentença (se habilitado)
+        if SENTENCE_DETECTION_ENABLED:
+            detector = SentenceBoundaryDetector(config={
+                'min_pause': SENTENCE_MIN_PAUSE,
+                'max_extension': SENTENCE_MAX_EXTENSION
+            })
+            all_words = transcription.get('words', [])
+
+            adjusted_suggestions = []
+            for suggestion in clip_suggestions:
+                adjusted_end, reason = detector.adjust_clip_end(
+                    words=all_words,
+                    start_time=suggestion['start_time'],
+                    suggested_end=suggestion['end_time'],
+                    max_duration=CLIP_MAX_DURATION
+                )
+
+                # Validar completude
+                validation = detector.validate_clip_completeness(
+                    all_words, suggestion['start_time'], adjusted_end
+                )
+
+                # Log do ajuste
+                if adjusted_end != suggestion['end_time']:
+                    bg_logger.info(
+                        "Clip boundary adjusted",
+                        clip_title=suggestion.get('title', 'unknown'),
+                        original_end=suggestion['end_time'],
+                        new_end=adjusted_end,
+                        reason=reason,
+                        is_complete=validation['is_complete']
+                    )
+
+                # Atualizar suggestion
+                suggestion['end_time'] = adjusted_end
+                suggestion['duration'] = adjusted_end - suggestion['start_time']
+                suggestion['boundary_adjustment'] = reason
+                suggestion['is_complete'] = validation['is_complete']
+
+                adjusted_suggestions.append(suggestion)
+
+            clip_suggestions = adjusted_suggestions
 
         update_progress(db, project, ProjectStatus.ANALYZING.value, 60,
                        f"IA encontrou {len(clip_suggestions)} momentos virais!")

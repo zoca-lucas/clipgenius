@@ -11,7 +11,7 @@ from pathlib import Path
 
 from models import get_db, Clip
 from services.editor import video_editor, TextOverlay, SubtitleStyle
-from services.subtitler import SubtitleGenerator
+from services.subtitler_v2 import SubtitleGeneratorV2  # V2: tamanho consistente
 from config import CLIPS_DIR, OUTPUT_FORMATS
 from .schemas import (
     ClipEditorData,
@@ -24,8 +24,8 @@ from .schemas import (
 
 router = APIRouter(prefix="/editor", tags=["editor"])
 
-# Initialize subtitle generator
-subtitler = SubtitleGenerator()
+# Initialize subtitle generator V2
+subtitler = SubtitleGeneratorV2()  # V2: tamanho consistente e melhor sincronização
 
 
 # ============ Request/Response Schemas ============
@@ -70,6 +70,8 @@ class SubtitleStyleRequest(BaseModel):
     highlight_color: str = Field("&H00FFFF")
     outline_width: int = Field(2, ge=0, le=10)
     margin_v: int = Field(80, ge=0, le=500)
+    position: str = Field("bottom", description="Subtitle position: top, middle, bottom")
+    vertical_offset: int = Field(10, ge=0, le=100, description="Vertical offset from position")
 
 
 class UpdateSubtitlesRequest(BaseModel):
@@ -477,7 +479,7 @@ async def get_clip_editor_data(
         except json.JSONDecodeError:
             subtitle_data = []
 
-    # Default style configuration
+    # Default style configuration (karaoke disabled by default)
     default_style = SubtitleStyleConfig(
         font_name="Arial",
         font_size=42,
@@ -487,8 +489,10 @@ async def get_clip_editor_data(
         outline_size=3,
         shadow_size=2,
         margin_v=80,
-        karaoke_enabled=True,
-        scale_effect=True
+        karaoke_enabled=False,  # Disabled by default
+        scale_effect=False,      # Disabled by default
+        position="bottom",
+        vertical_offset=10
     )
 
     return ClipEditorData(
@@ -712,3 +716,324 @@ async def export_clip_with_subtitles(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
+
+
+# ============ Bulk Operations ============
+
+class BulkExportRequest(BaseModel):
+    clip_ids: List[int] = Field(..., min_length=1, description="List of clip IDs to export")
+    format_id: str = Field("vertical", description="Output format (vertical, square, landscape)")
+    include_subtitles: bool = Field(True, description="Whether to include subtitles")
+    subtitle_style: Optional[SubtitleStyleConfig] = None
+
+
+class BulkDeleteRequest(BaseModel):
+    clip_ids: List[int] = Field(..., min_length=1, description="List of clip IDs to delete")
+
+
+class BulkApplyStyleRequest(BaseModel):
+    clip_ids: List[int] = Field(..., min_length=1, description="List of clip IDs")
+    subtitle_style: SubtitleStyleConfig = Field(..., description="Style to apply")
+
+
+class BulkOperationResult(BaseModel):
+    success: bool
+    total: int
+    processed: int
+    failed: int
+    results: List[dict]
+    message: str
+
+
+@router.post("/clips/bulk-export", response_model=BulkOperationResult)
+async def bulk_export_clips(
+    request: BulkExportRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Export multiple clips at once.
+    Returns a list of export results for each clip.
+    """
+    results = []
+    processed = 0
+    failed = 0
+
+    # Validate format
+    if request.format_id not in OUTPUT_FORMATS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid format. Available: {', '.join(OUTPUT_FORMATS.keys())}"
+        )
+
+    for clip_id in request.clip_ids:
+        try:
+            clip = db.query(Clip).filter(Clip.id == clip_id).first()
+            if not clip:
+                results.append({
+                    "clip_id": clip_id,
+                    "success": False,
+                    "error": "Clip not found"
+                })
+                failed += 1
+                continue
+
+            video_path = clip.video_path
+            if not video_path or not Path(video_path).exists():
+                results.append({
+                    "clip_id": clip_id,
+                    "success": False,
+                    "error": "Video file not found"
+                })
+                failed += 1
+                continue
+
+            output_name = f"clip_{clip_id}_export_{request.format_id}"
+            output_path = CLIPS_DIR / f"{output_name}.mp4"
+
+            if request.include_subtitles:
+                subtitle_data = clip.subtitle_data
+                if isinstance(subtitle_data, str):
+                    subtitle_data = json.loads(subtitle_data)
+
+                if subtitle_data:
+                    style = None
+                    if request.subtitle_style:
+                        style = {
+                            'font_name': request.subtitle_style.font_name,
+                            'font_size': request.subtitle_style.font_size,
+                            'primary_color': request.subtitle_style.primary_color,
+                            'outline_color': request.subtitle_style.outline_color,
+                            'outline': request.subtitle_style.outline_size,
+                            'shadow': request.subtitle_style.shadow_size,
+                            'margin_v': request.subtitle_style.margin_v,
+                        }
+                        karaoke_enabled = request.subtitle_style.karaoke_enabled
+                    else:
+                        karaoke_enabled = False
+
+                    result = subtitler.burn_subtitles_on_demand(
+                        video_path=video_path,
+                        subtitle_data=subtitle_data,
+                        output_path=str(output_path),
+                        style=style,
+                        enable_karaoke=karaoke_enabled
+                    )
+                    export_path = result['path']
+                else:
+                    import shutil
+                    shutil.copy2(video_path, output_path)
+                    export_path = str(output_path)
+            else:
+                import shutil
+                shutil.copy2(video_path, output_path)
+                export_path = str(output_path)
+
+            filename = Path(export_path).name
+            download_url = f"/clips/{filename}"
+
+            results.append({
+                "clip_id": clip_id,
+                "success": True,
+                "download_url": download_url,
+                "video_path": export_path
+            })
+            processed += 1
+
+        except Exception as e:
+            results.append({
+                "clip_id": clip_id,
+                "success": False,
+                "error": str(e)
+            })
+            failed += 1
+
+    return BulkOperationResult(
+        success=failed == 0,
+        total=len(request.clip_ids),
+        processed=processed,
+        failed=failed,
+        results=results,
+        message=f"Exported {processed} of {len(request.clip_ids)} clips"
+    )
+
+
+@router.post("/clips/bulk-delete", response_model=BulkOperationResult)
+async def bulk_delete_clips(
+    request: BulkDeleteRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Delete multiple clips at once.
+    """
+    results = []
+    processed = 0
+    failed = 0
+
+    for clip_id in request.clip_ids:
+        try:
+            clip = db.query(Clip).filter(Clip.id == clip_id).first()
+            if not clip:
+                results.append({
+                    "clip_id": clip_id,
+                    "success": False,
+                    "error": "Clip not found"
+                })
+                failed += 1
+                continue
+
+            # Delete video files
+            for path_attr in ['video_path', 'video_path_with_subtitles', 'subtitle_path', 'subtitle_file']:
+                path = getattr(clip, path_attr, None)
+                if path and Path(path).exists():
+                    try:
+                        Path(path).unlink()
+                    except Exception:
+                        pass
+
+            # Delete from database
+            db.delete(clip)
+            db.commit()
+
+            results.append({
+                "clip_id": clip_id,
+                "success": True
+            })
+            processed += 1
+
+        except Exception as e:
+            db.rollback()
+            results.append({
+                "clip_id": clip_id,
+                "success": False,
+                "error": str(e)
+            })
+            failed += 1
+
+    return BulkOperationResult(
+        success=failed == 0,
+        total=len(request.clip_ids),
+        processed=processed,
+        failed=failed,
+        results=results,
+        message=f"Deleted {processed} of {len(request.clip_ids)} clips"
+    )
+
+
+@router.post("/clips/bulk-apply-style", response_model=BulkOperationResult)
+async def bulk_apply_style(
+    request: BulkApplyStyleRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Apply subtitle style to multiple clips at once.
+    Regenerates .ass files with the new style.
+    """
+    results = []
+    processed = 0
+    failed = 0
+
+    style = {
+        'font_name': request.subtitle_style.font_name,
+        'font_size': request.subtitle_style.font_size,
+        'primary_color': request.subtitle_style.primary_color,
+        'outline_color': request.subtitle_style.outline_color,
+        'outline': request.subtitle_style.outline_size,
+        'shadow': request.subtitle_style.shadow_size,
+        'margin_v': request.subtitle_style.margin_v,
+    }
+
+    for clip_id in request.clip_ids:
+        try:
+            clip = db.query(Clip).filter(Clip.id == clip_id).first()
+            if not clip:
+                results.append({
+                    "clip_id": clip_id,
+                    "success": False,
+                    "error": "Clip not found"
+                })
+                failed += 1
+                continue
+
+            # Get subtitle data
+            subtitle_data = clip.subtitle_data
+            if isinstance(subtitle_data, str):
+                subtitle_data = json.loads(subtitle_data)
+
+            if not subtitle_data:
+                results.append({
+                    "clip_id": clip_id,
+                    "success": False,
+                    "error": "No subtitle data"
+                })
+                failed += 1
+                continue
+
+            # Extract words
+            all_words = []
+            for entry in subtitle_data:
+                words = entry.get('words', [])
+                if words:
+                    all_words.extend(words)
+                else:
+                    text = entry.get('text', '')
+                    start = entry.get('start', 0)
+                    end = entry.get('end', 0)
+                    word_list = text.split()
+                    if word_list:
+                        duration_per_word = (end - start) / len(word_list)
+                        for j, word in enumerate(word_list):
+                            all_words.append({
+                                'word': word,
+                                'start': start + j * duration_per_word,
+                                'end': start + (j + 1) * duration_per_word
+                            })
+
+            # Generate new ASS file
+            output_name = f"clip_{clip_id}"
+            ass_path = CLIPS_DIR / f"{output_name}.ass"
+
+            karaoke_enabled = request.subtitle_style.karaoke_enabled if request.subtitle_style else False
+
+            if karaoke_enabled:
+                subtitler.generate_ass_karaoke(
+                    words=all_words,
+                    output_path=str(ass_path),
+                    offset=0,
+                    style=style
+                )
+            else:
+                subtitler.generate_ass(
+                    words=all_words,
+                    output_path=str(ass_path),
+                    offset=0,
+                    style=style
+                )
+
+            clip.subtitle_file = str(ass_path)
+            clip.subtitle_path = str(ass_path)
+            db.commit()
+
+            results.append({
+                "clip_id": clip_id,
+                "success": True,
+                "subtitle_file": str(ass_path)
+            })
+            processed += 1
+
+        except Exception as e:
+            db.rollback()
+            results.append({
+                "clip_id": clip_id,
+                "success": False,
+                "error": str(e)
+            })
+            failed += 1
+
+    return BulkOperationResult(
+        success=failed == 0,
+        total=len(request.clip_ids),
+        processed=processed,
+        failed=failed,
+        results=results,
+        message=f"Applied style to {processed} of {len(request.clip_ids)} clips"
+    )

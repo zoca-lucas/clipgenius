@@ -378,3 +378,96 @@ export function createDefaultLayers(): Layer[] {
     },
   ];
 }
+
+// ============ Bulk Operations ============
+
+export interface BulkExportOptions {
+  clipIds: number[];
+  formatId: string;
+  includeSubtitles: boolean;
+  subtitleStyle?: SubtitleStyle;
+}
+
+export interface BulkOperationResult {
+  success: boolean;
+  total: number;
+  processed: number;
+  failed: number;
+  results: Array<{
+    clip_id: number;
+    success: boolean;
+    download_url?: string;
+    error?: string;
+  }>;
+  message: string;
+}
+
+/**
+ * Bulk export multiple clips
+ */
+export async function bulkExportClips(options: BulkExportOptions): Promise<BulkOperationResult> {
+  const body: Record<string, unknown> = {
+    clip_ids: options.clipIds,
+    format_id: options.formatId,
+    include_subtitles: options.includeSubtitles,
+  };
+
+  if (options.subtitleStyle) {
+    body.subtitle_style = styleToBackend(options.subtitleStyle);
+  }
+
+  const response = await fetch(`${API_BASE_URL}/editor/clips/bulk-export`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+    throw new Error(error.detail || `Bulk export failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Bulk delete multiple clips
+ */
+export async function bulkDeleteClips(clipIds: number[]): Promise<BulkOperationResult> {
+  const response = await fetch(`${API_BASE_URL}/editor/clips/bulk-delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clip_ids: clipIds }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+    throw new Error(error.detail || `Bulk delete failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Bulk apply subtitle style to multiple clips
+ */
+export async function bulkApplyStyle(
+  clipIds: number[],
+  style: SubtitleStyle
+): Promise<BulkOperationResult> {
+  const response = await fetch(`${API_BASE_URL}/editor/clips/bulk-apply-style`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      clip_ids: clipIds,
+      subtitle_style: styleToBackend(style),
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+    throw new Error(error.detail || `Bulk apply style failed: ${response.status}`);
+  }
+
+  return response.json();
+}

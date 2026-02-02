@@ -12,6 +12,16 @@ python-dotenv
 aiosqlite
 httpx
 
+# Transcription backends for precise word-level timestamps
+# WhisperX - RECOMMENDED: Best word alignment via wav2vec2
+whisperx
+
+# stable-ts - Stabilized timestamps (alternative)
+stable-ts
+
+# faster-whisper - Fast transcription with CTranslate2
+faster-whisper
+
 # AI Reframe - Face tracking
 mediapipe
 opencv-python

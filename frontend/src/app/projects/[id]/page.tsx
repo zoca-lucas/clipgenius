@@ -16,11 +16,13 @@ import {
 import Header from '@/components/Header';
 import ClipCard from '@/components/ClipCard';
 import ProgressBar from '@/components/ProgressBar';
+import BulkActions, { BulkExportOptions, ClipSelectionCard } from '@/components/BulkActions';
 import {
   getProject,
   getProjectStatus,
   deleteProject,
   deleteClip,
+  reprocessProject,
   ProjectDetail,
   ProcessingStatus,
   Clip,
@@ -28,6 +30,13 @@ import {
   getStatusColor,
   getStatusLabel,
 } from '@/lib/api';
+import {
+  bulkExportClips,
+  bulkDeleteClips,
+  bulkApplyStyle,
+  getDefaultSubtitleStyle,
+} from '@/lib/editorApi';
+import { useBrandKitStore } from '@/stores/brandKitStore';
 
 export default function ProjectPage() {
   const params = useParams();
@@ -38,7 +47,12 @@ export default function ProjectPage() {
   const [status, setStatus] = useState<ProcessingStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [reprocessing, setReprocessing] = useState(false);
+  const [selectedClipIds, setSelectedClipIds] = useState<Set<number>>(new Set());
+  const [bulkMode, setBulkMode] = useState(false);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  const { applyToSubtitleStyle } = useBrandKitStore();
 
   const loadProject = useCallback(async () => {
     try {
@@ -97,6 +111,24 @@ export default function ProjectPage() {
     }
   };
 
+  const handleReprocess = async () => {
+    if (!confirm('Reprocessar o projeto? Isso irá gerar novos cortes.')) {
+      return;
+    }
+
+    try {
+      setReprocessing(true);
+      setError('');
+      await reprocessProject(projectId);
+      await loadProject();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Erro ao reprocessar projeto';
+      setError(message);
+    } finally {
+      setReprocessing(false);
+    }
+  };
+
   const handleDeleteClip = async (clipId: number) => {
     try {
       await deleteClip(clipId);
@@ -115,6 +147,71 @@ export default function ProjectPage() {
         ),
       });
     }
+  };
+
+  // Bulk operation handlers
+  const handleBulkExport = async (ids: number[], options: BulkExportOptions) => {
+    try {
+      const result = await bulkExportClips({
+        clipIds: ids,
+        formatId: options.format,
+        includeSubtitles: options.includeSubtitles,
+        subtitleStyle: options.brandKitId
+          ? applyToSubtitleStyle(options.brandKitId) || getDefaultSubtitleStyle()
+          : undefined,
+      });
+
+      // Download all exported files
+      const baseUrl = process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'http://localhost:8000';
+      for (const res of result.results) {
+        if (res.success && res.download_url) {
+          window.open(`${baseUrl}${res.download_url}`, '_blank');
+        }
+      }
+
+      alert(`Exportados ${result.processed} de ${result.total} clips`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Erro ao exportar clips';
+      alert(message);
+    }
+  };
+
+  const handleBulkDelete = async (ids: number[]) => {
+    try {
+      const result = await bulkDeleteClips(ids);
+      alert(`Excluidos ${result.processed} de ${result.total} clips`);
+      setSelectedClipIds(new Set());
+      loadProject();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Erro ao excluir clips';
+      alert(message);
+    }
+  };
+
+  const handleBulkApplyBrandKit = async (ids: number[], brandKitId: string) => {
+    const style = applyToSubtitleStyle(brandKitId);
+    if (!style) {
+      alert('Brand Kit nao encontrado');
+      return;
+    }
+
+    try {
+      const result = await bulkApplyStyle(ids, style);
+      alert(`Estilo aplicado a ${result.processed} de ${result.total} clips`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Erro ao aplicar estilo';
+      alert(message);
+    }
+  };
+
+  const toggleClipSelection = (clipId: number) => {
+    const newSelected = new Set(selectedClipIds);
+    if (newSelected.has(clipId)) {
+      newSelected.delete(clipId);
+    } else {
+      newSelected.add(clipId);
+    }
+    setSelectedClipIds(newSelected);
   };
 
   if (loading) {
@@ -235,6 +332,24 @@ export default function ProjectPage() {
                   >
                     <RefreshCw className="w-5 h-5" />
                   </button>
+                  {(project.status === 'error' || project.status === 'completed') && (
+                    <button
+                      onClick={handleReprocess}
+                      disabled={reprocessing}
+                      className={`p-2 rounded-lg transition-colors ${
+                        reprocessing
+                          ? 'bg-primary/20 text-primary/50 cursor-not-allowed'
+                          : 'bg-primary/20 hover:bg-primary/30 text-primary'
+                      }`}
+                      title="Reprocessar projeto"
+                    >
+                      {reprocessing ? (
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                      ) : (
+                        <RefreshCw className="w-5 h-5" />
+                      )}
+                    </button>
+                  )}
                   <button
                     onClick={handleDeleteProject}
                     disabled={isProcessing}
@@ -255,21 +370,73 @@ export default function ProjectPage() {
 
         {/* Clips Grid */}
         {project.status === 'completed' && project.clips.length > 0 ? (
-          <div>
-            <h2 className="text-xl font-bold text-white mb-6">
-              Cortes Gerados ({project.clips.length})
-            </h2>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-bold text-white">
+                Cortes Gerados ({project.clips.length})
+              </h2>
+              <button
+                onClick={() => {
+                  setBulkMode(!bulkMode);
+                  if (bulkMode) setSelectedClipIds(new Set());
+                }}
+                className={`px-4 py-2 rounded-lg text-sm transition-colors ${
+                  bulkMode
+                    ? 'bg-primary text-black'
+                    : 'bg-dark-700 hover:bg-dark-600 text-white'
+                }`}
+              >
+                {bulkMode ? 'Cancelar Selecao' : 'Selecionar Multiplos'}
+              </button>
+            </div>
+
+            {/* Bulk Actions Bar */}
+            {bulkMode && (
+              <BulkActions
+                clips={project.clips.map((c) => ({
+                  id: c.id,
+                  title: c.title || undefined,
+                  duration: c.duration || undefined,
+                  viral_score: c.viral_score || undefined,
+                }))}
+                selectedIds={selectedClipIds}
+                onSelectionChange={setSelectedClipIds}
+                onBulkExport={handleBulkExport}
+                onBulkDelete={handleBulkDelete}
+                onBulkApplyBrandKit={handleBulkApplyBrandKit}
+              />
+            )}
 
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
               {project.clips
                 .sort((a, b) => (b.viral_score || 0) - (a.viral_score || 0))
                 .map((clip) => (
-                  <ClipCard
-                    key={clip.id}
-                    clip={clip}
-                    onDelete={handleDeleteClip}
-                    onUpdate={handleUpdateClip}
-                  />
+                  <div key={clip.id} className="relative">
+                    {bulkMode && (
+                      <div
+                        className={`absolute top-2 left-2 z-10 w-6 h-6 rounded cursor-pointer flex items-center justify-center transition-colors ${
+                          selectedClipIds.has(clip.id)
+                            ? 'bg-primary'
+                            : 'bg-dark-800/80 hover:bg-dark-700'
+                        }`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleClipSelection(clip.id);
+                        }}
+                      >
+                        {selectedClipIds.has(clip.id) && (
+                          <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                          </svg>
+                        )}
+                      </div>
+                    )}
+                    <ClipCard
+                      clip={clip}
+                      onDelete={handleDeleteClip}
+                      onUpdate={handleUpdateClip}
+                    />
+                  </div>
                 ))}
             </div>
           </div>
@@ -287,7 +454,28 @@ export default function ProjectPage() {
         ) : project.status === 'error' ? (
           <div className="text-center py-12">
             <p className="text-red-400 mb-2">Erro no processamento</p>
-            <p className="text-gray-500 text-sm">{project.error_message}</p>
+            <p className="text-gray-500 text-sm mb-4">{project.error_message}</p>
+            <button
+              onClick={handleReprocess}
+              disabled={reprocessing}
+              className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+                reprocessing
+                  ? 'bg-primary/20 text-primary/50 cursor-not-allowed'
+                  : 'bg-primary hover:bg-primary/80 text-white'
+              }`}
+            >
+              {reprocessing ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Reprocessando...
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="w-4 h-4" />
+                  Tentar novamente
+                </>
+              )}
+            </button>
           </div>
         ) : (
           <div className="py-8">

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
-import { ArrowLeft, Save, Download, Loader2, X, Check } from 'lucide-react';
+import { ArrowLeft, Save, Download, Loader2, X, Check, Palette, Undo2, Redo2 } from 'lucide-react';
 import {
   getClipEditorData,
   updateSubtitles,
@@ -17,10 +17,13 @@ import {
   SubtitleStyle,
   Layer,
 } from '@/lib/editorApi';
+import { useEditorStore } from '@/stores/editorStore';
 import VideoPreview, { VideoPreviewRef } from '@/components/editor/VideoPreview';
 import MultiTrackTimeline from '@/components/editor/MultiTrackTimeline';
 import LayerPanel from '@/components/editor/LayerPanel';
 import SubtitleStylePanel from '@/components/editor/SubtitleStylePanel';
+import BrandKitPanel from '@/components/editor/BrandKitPanel';
+import { WaveformPlaceholder } from '@/components/editor/Waveform';
 
 interface ExportModalProps {
   isOpen: boolean;
@@ -149,10 +152,44 @@ export default function EditorPage() {
 
   // UI state
   const [showStylePanel, setShowStylePanel] = useState(false);
+  const [showBrandKitPanel, setShowBrandKitPanel] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+
+  // History for undo/redo
+  const [history, setHistory] = useState<{ subtitles: SubtitleEntry[]; style: SubtitleStyle }[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+
+  const saveToHistory = useCallback(() => {
+    const newEntry = { subtitles: [...subtitles], style: { ...subtitleStyle } };
+    const newHistory = history.slice(0, historyIndex + 1);
+    newHistory.push(newEntry);
+    if (newHistory.length > 30) newHistory.shift();
+    setHistory(newHistory);
+    setHistoryIndex(newHistory.length - 1);
+  }, [subtitles, subtitleStyle, history, historyIndex]);
+
+  const undo = useCallback(() => {
+    if (historyIndex > 0) {
+      const prev = history[historyIndex - 1];
+      setSubtitles(prev.subtitles);
+      setSubtitleStyle(prev.style);
+      setHistoryIndex(historyIndex - 1);
+      setHasChanges(true);
+    }
+  }, [history, historyIndex]);
+
+  const redo = useCallback(() => {
+    if (historyIndex < history.length - 1) {
+      const next = history[historyIndex + 1];
+      setSubtitles(next.subtitles);
+      setSubtitleStyle(next.style);
+      setHistoryIndex(historyIndex + 1);
+      setHasChanges(true);
+    }
+  }, [history, historyIndex]);
 
   // Load editor data
   useEffect(() => {
@@ -363,6 +400,26 @@ export default function EditorPage() {
           </div>
 
           <div className="flex items-center gap-3">
+            {/* Undo/Redo */}
+            <div className="flex items-center gap-1 mr-2">
+              <button
+                onClick={undo}
+                disabled={historyIndex <= 0}
+                className="p-2 hover:bg-dark-700 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                title="Desfazer (Ctrl+Z)"
+              >
+                <Undo2 className="w-4 h-4" />
+              </button>
+              <button
+                onClick={redo}
+                disabled={historyIndex >= history.length - 1}
+                className="p-2 hover:bg-dark-700 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                title="Refazer (Ctrl+Shift+Z)"
+              >
+                <Redo2 className="w-4 h-4" />
+              </button>
+            </div>
+
             {/* Save Indicator */}
             {saveSuccess && (
               <span className="flex items-center gap-1 text-green-500 text-sm">
@@ -446,25 +503,66 @@ export default function EditorPage() {
             onLayerSettings={handleLayerSettings}
           />
 
+          {/* Panel Tabs */}
+          <div className="flex gap-2">
+            <button
+              onClick={() => {
+                setShowStylePanel(true);
+                setShowBrandKitPanel(false);
+              }}
+              className={`flex-1 py-2 text-sm rounded-lg transition-colors ${
+                showStylePanel
+                  ? 'bg-primary text-black'
+                  : 'bg-dark-700 hover:bg-dark-600'
+              }`}
+            >
+              🎨 Estilo
+            </button>
+            <button
+              onClick={() => {
+                setShowBrandKitPanel(true);
+                setShowStylePanel(false);
+              }}
+              className={`flex-1 py-2 text-sm rounded-lg transition-colors ${
+                showBrandKitPanel
+                  ? 'bg-primary text-black'
+                  : 'bg-dark-700 hover:bg-dark-600'
+              }`}
+            >
+              <Palette className="w-4 h-4 inline mr-1" />
+              Brand Kit
+            </button>
+          </div>
+
           {/* Subtitle Style Panel */}
           {showStylePanel && (
             <SubtitleStylePanel
               style={subtitleStyle}
               onStyleChange={(newStyle) => {
+                saveToHistory();
                 setSubtitleStyle(newStyle);
                 setHasChanges(true);
               }}
             />
           )}
 
-          {/* Style Panel Toggle (if not shown) */}
-          {!showStylePanel && (
-            <button
-              onClick={() => setShowStylePanel(true)}
-              className="w-full py-3 bg-dark-800 hover:bg-dark-700 rounded-lg text-sm transition-colors"
-            >
-              🎨 Configurar Estilo das Legendas
-            </button>
+          {/* Brand Kit Panel */}
+          {showBrandKitPanel && (
+            <BrandKitPanel
+              currentStyle={subtitleStyle}
+              onApplyStyle={(style) => {
+                saveToHistory();
+                setSubtitleStyle(style);
+                setHasChanges(true);
+              }}
+            />
+          )}
+
+          {/* Show prompt if neither panel is shown */}
+          {!showStylePanel && !showBrandKitPanel && (
+            <div className="text-center py-8 text-gray-500 text-sm">
+              Selecione uma opcao acima para configurar o estilo
+            </div>
           )}
         </div>
       </div>

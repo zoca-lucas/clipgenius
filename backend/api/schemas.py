@@ -146,8 +146,11 @@ class SubtitleStyleConfig(BaseModel):
     outline_size: int = Field(3, ge=0, le=10, description="Outline thickness")
     shadow_size: int = Field(2, ge=0, le=10, description="Shadow size")
     margin_v: int = Field(80, ge=0, le=500, description="Vertical margin from bottom")
-    karaoke_enabled: bool = Field(True, description="Enable karaoke word highlighting")
-    scale_effect: bool = Field(True, description="Enable scale pop effect on words")
+    karaoke_enabled: bool = Field(False, description="Enable karaoke word highlighting")
+    scale_effect: bool = Field(False, description="Enable scale pop effect on words")
+    # Position settings
+    position: str = Field("bottom", description="Subtitle position: top, middle, bottom")
+    vertical_offset: int = Field(10, ge=0, le=100, description="Vertical offset from position (0-100%)")
 
 
 class ClipEditorData(BaseModel):

@@ -28,57 +28,103 @@ logger = get_service_logger("analyzer")
 class ClipAnalyzer:
     """Service to analyze transcription and suggest viral clips using Groq, Minimax, or Ollama"""
 
-    ANALYSIS_PROMPT = """🎯 SISTEMA ESPECIALIZADO EM ANÁLISE E GERAÇÃO DE CORTES VIRAIS PARA TIKTOK
+    ANALYSIS_PROMPT = """🎯 SISTEMA ESPECIALIZADO EM ANÁLISE E GERAÇÃO DE CORTES VIRAIS PARA TIKTOK/REELS/SHORTS
 
-Você é um ANALISTA EXPERT em conteúdo viral que aplica:
+Você é um EDITOR PROFISSIONAL de vídeos virais que aplica:
 - Raciocínio MINIMAX (maximizar chance de viralização, minimizar risco de cortes fracos)
-- Conhecimento profundo de padrões virais do TikTok
+- Conhecimento profundo de padrões virais do TikTok, Instagram Reels e YouTube Shorts
+- Técnicas dos maiores criadores de conteúdo viral (Alex Hormozi, MrBeast, etc.)
 
 ⚠️ REGRA CRÍTICA: NUNCA retorne zero cortes. SEMPRE selecione pelo menos 1 corte, mesmo que o conteúdo seja fraco.
 
 📊 PARÂMETROS:
 - CORTES SOLICITADOS: {num_clips}
 - DURAÇÃO MÍNIMA: {min_duration}s | MÁXIMA: {max_duration}s
-- DURAÇÃO IDEAL: 15-45 segundos (OBRIGATÓRIO para TikTok viral)
+- DURAÇÃO IDEAL: 20-35 segundos (MELHOR para conteúdo completo + algoritmo viral)
 - ⚠️ CLIPS MENORES QUE {min_duration}s SERÃO REJEITADOS AUTOMATICAMENTE
 
-🔍 FLUXO DE ANÁLISE (SIGA RIGOROSAMENTE):
+🚨🚨🚨 REGRA MAIS IMPORTANTE - COMPLETUDE DO CONTEÚDO 🚨🚨🚨
 
-**1. MAPEAMENTO ESTRUTURAL**
-Identifique na transcrição:
-- Introdução, desenvolvimento, pontos de virada, clímax, fechamento
-- Frases de IMPACTO EXTREMO (choque, revelação, gatilhos fortes)
-- Momentos de EMOÇÃO INTENSA (medo, tensão, raiva, surpresa, curiosidade, riso)
-- GATILHOS TIKTOK: "ninguém te conta isso", "olha isso aqui", "você está fazendo errado", "isso mudou minha vida"
+**NUNCA, EM HIPÓTESE ALGUMA, CORTE NO MEIO DE:**
+- Uma explicação que está sendo dada (ex: "a fórmula é..." → ESPERE A FÓRMULA COMPLETA)
+- Uma história sendo contada (ex: "então aconteceu..." → ESPERE O DESFECHO)
+- Uma lista de itens (ex: "primeiro..., segundo..." → INCLUA TODOS OS ITENS)
+- Uma pergunta sendo respondida (ex: "a resposta é..." → INCLUA A RESPOSTA)
+- Um conceito sendo explicado (ex: "isso funciona porque..." → INCLUA A EXPLICAÇÃO)
+- Uma revelação/insight (ex: "o segredo é..." → INCLUA O SEGREDO COMPLETO)
 
-**2. IDENTIFICAÇÃO DE HOOKS VIRAIS**
-Para cada corte, a PRIMEIRA FRASE deve:
-- Criar CURIOSIDADE imediata (o viewer PRECISA saber o que vem depois)
-- Gerar CHOQUE ou POLÊMICA (declaração ousada)
-- Provocar IDENTIFICAÇÃO ("isso sou eu", "já passei por isso")
-- Criar TENSÃO ou MEDO (alerta, consequência negativa)
+**ONDE COMEÇAR O CORTE:**
+✅ Logo ANTES de uma pergunta/promessa ("Você sabe qual é...", "O segredo é...")
+✅ No início de uma nova ideia/tópico
+✅ Quando alguém levanta um problema/dor
+✅ Em momentos de tensão/curiosidade
 
-**3. CRITÉRIO MINIMAX DE DECISÃO**
-Para cada trecho candidato, avalie:
-- PAYOFF: Potencial de views/engajamento (0-10)
-- RISCO: Chance de ser desinteressante/confuso (0-10)
-- ESCOLHA: Maximize payoff, minimize risco
+**ONDE TERMINAR O CORTE:**
+✅ DEPOIS que a ideia foi COMPLETAMENTE explicada
+✅ DEPOIS de uma conclusão natural ("...então é isso", "...entendeu?", pausa longa)
+✅ DEPOIS de uma frase de impacto/punchline
+✅ Em um momento de pausa natural na fala
+✅ DEPOIS de responder a pergunta que foi feita no início
+❌ NUNCA termine com "então a fórmula é..." sem dar a fórmula
+❌ NUNCA termine com "e aí..." deixando no ar
+❌ NUNCA termine no meio de uma frase
+
+**TESTE DE COMPLETUDE:**
+Antes de definir o timestamp_fim, pergunte-se:
+1. "Se eu fosse o espectador, eu ficaria frustrado por não saber o resto?"
+2. "A ideia principal foi entregue por completo?"
+3. "O corte faz sentido sozinho, sem contexto adicional?"
+Se a resposta for NÃO para qualquer pergunta, ESTENDA o timestamp_fim até a conclusão.
+
+🔍 FLUXO DE ANÁLISE:
+
+**1. MAPEAMENTO DE MOMENTOS VIRAIS**
+Identifique na transcrição os seguintes gatilhos:
+
+🎭 MUDANÇAS EMOCIONAIS (prioridade máxima):
+- Surpresa ou revelação inesperada
+- Raiva ou indignação genuína
+- Felicidade ou entusiasmo contagiante
+
+❓ MOMENTOS DE CLAREZA:
+- Dúvidas sendo respondidas de forma clara e COMPLETA
+- "Aha moments" - quando algo faz sentido
+- Explicações simples de conceitos complexos (INCLUIR EXPLICAÇÃO TODA)
+
+💬 FRASES DE IMPACTO:
+- Declarações polêmicas ou controversas
+- Ensinamentos rápidos e aplicáveis (INCLUIR O ENSINAMENTO COMPLETO)
+- Gatilhos: "ninguém te conta", "o segredo é", "pare de fazer isso"
+
+**2. REGRA DOS 3 SEGUNDOS (HOOK)**
+Os PRIMEIROS 3 SEGUNDOS decidem se a pessoa continua assistindo.
+O corte DEVE começar com:
+- Uma pergunta intrigante
+- Uma declaração chocante
+- Uma promessa de valor
+- Um momento de tensão
+
+**3. ESTRUTURA IDEAL DO CORTE**
+- HOOK (0-3s): Captura atenção imediata
+- CONTEÚDO (3-30s): Entrega valor COMPLETO
+- FECHAMENTO (últimos segundos): Conclusão satisfatória, não corte abrupto
 
 **4. PONTUAÇÃO VIRAL (nota_viral 0-10):**
 
 | Critério | Pontos | Descrição |
 |----------|--------|-----------|
-| HOOK | 0-2 | Primeiros 3 segundos PRENDEM? Curiosidade/choque/emoção forte? |
-| RETENÇÃO | 0-2 | Vale rewatch? Loop natural? Densidade de valor por segundo? |
-| ENGAJAMENTO | 0-2 | Gera comentários? Debate? Relatabilidade? |
-| COMPARTILHAMENTO | 0-2 | Frase quotável? Meme potential? Enviaria para amigo? |
-| COMPLETUDE | 0-2 | Ideia fechada? Twist/revelação? Não precisa de contexto extra? |
+| HOOK | 0-2 | Primeiros 3 segundos PRENDEM? |
+| ENTREGA | 0-3 | O conteúdo prometido é ENTREGUE POR COMPLETO? |
+| FECHAMENTO | 0-2 | Termina de forma satisfatória? Não deixa no ar? |
+| ENGAJAMENTO | 0-2 | Gera comentários? Debate? |
+| STANDALONE | 0-1 | Faz sentido sozinho sem contexto? |
 
 **5. REGRAS DE VALIDAÇÃO:**
 - Cortes NÃO podem se sobrepor (timestamps únicos)
 - Ordene do MELHOR para o PIOR (maior nota primeiro)
-- Se não encontrar {num_clips} cortes PERFEITOS, inclua os MELHORES DISPONÍVEIS
-- NUNCA retorne lista vazia - sempre há pelo menos 1 trecho utilizável
+- SEMPRE inclua a conclusão do raciocínio no corte
+- Se a explicação é longa, é MELHOR ter um clip de 40s completo do que um de 25s incompleto
+- NUNCA retorne lista vazia
 
 📝 TRANSCRIÇÃO PARA ANÁLISE:
 {transcription}
@@ -90,15 +136,16 @@ Para cada trecho candidato, avalie:
     "timestamp_fim": "MM:SS",
     "titulo": "Título chamativo e curto (máx 60 chars)",
     "nota_viral": 8.5,
-    "justificativa": "Por que vai viralizar (mencione critérios específicos)",
-    "gancho": "Primeira frase exata do corte (pode adaptar levemente para mais impacto)",
-    "categoria": "curiosidade|medo|polêmica|revelação|identificação|humor",
-    "cta_sugerido": "Pergunta para engajar nos comentários"
+    "justificativa": "Por que vai viralizar E por que o corte está completo",
+    "gancho": "Primeira frase exata do corte (o HOOK)",
+    "fecho": "Última frase do corte (deve ser uma conclusão satisfatória)",
+    "categoria": "emocao|curiosidade|humor|polemico|educativo|revelacao",
+    "conteudo_completo": true
   }}
 ]}}
 
-🎯 MISSÃO: Retorne EXATAMENTE {num_clips} cortes com maior potencial viral, ordenados do MELHOR para o PIOR.
-Se o vídeo for curto ou fraco, ainda assim retorne o máximo de cortes viáveis (mínimo 1)."""
+🎯 MISSÃO: Retorne EXATAMENTE {num_clips} cortes com conteúdo COMPLETO e satisfatório.
+Cada corte deve entregar o que promete no início - NUNCA deixe o espectador frustrado."""
 
     def __init__(self, provider: str = None):
         """
@@ -527,6 +574,12 @@ Se o vídeo for curto ou fraco, ainda assim retorne o máximo de cortes viáveis
             except (ValueError, TypeError):
                 viral_score = 5.0
 
+            # Check if content is marked as complete
+            is_complete = clip_data.get('conteudo_completo', True)
+            if not is_complete:
+                logger.warning("Clip marked as incomplete content", clip_index=i+1)
+                print(f"   ⚠️ Warning: Clip {i+1} was marked as incomplete content")
+
             clips.append({
                 'start_time': start_seconds,
                 'end_time': end_seconds,
@@ -535,7 +588,9 @@ Se o vídeo for curto ou fraco, ainda assim retorne o máximo de cortes viáveis
                 'viral_score': viral_score,
                 'justification': clip_data.get('justificativa', ''),
                 'hook': clip_data.get('gancho', ''),
-                'category': clip_data.get('categoria', 'insight')
+                'closing': clip_data.get('fecho', ''),  # New field for the closing phrase
+                'category': clip_data.get('categoria', 'insight'),
+                'is_complete': is_complete
             })
 
         # Sort by viral score (highest first)
@@ -569,7 +624,9 @@ Se o vídeo for curto ou fraco, ainda assim retorne o máximo de cortes viáveis
                         'viral_score': viral_score,
                         'justification': clip_data.get('justificativa', ''),
                         'hook': clip_data.get('gancho', ''),
-                        'category': clip_data.get('categoria', 'insight')
+                        'closing': clip_data.get('fecho', ''),
+                        'category': clip_data.get('categoria', 'insight'),
+                        'is_complete': clip_data.get('conteudo_completo', True)
                     })
                     print(f"   ✅ Clip {i+1} aceito via fallback (min {fallback_min_duration}s): {duration}s")
 
@@ -605,7 +662,9 @@ Se o vídeo for curto ou fraco, ainda assim retorne o máximo de cortes viáveis
                     'viral_score': 5.0,
                     'justification': 'Clip gerado automaticamente do início do vídeo',
                     'hook': clip_text[:100].strip() if clip_text else 'Confira este momento',
-                    'category': 'insight'
+                    'closing': '',
+                    'category': 'insight',
+                    'is_complete': True
                 })
                 print(f"   ✅ Clip fallback criado: {best_start:.0f}s - {best_end:.0f}s ({best_end - best_start:.0f}s)")
 
